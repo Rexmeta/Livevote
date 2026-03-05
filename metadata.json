@@ -1,0 +1,5 @@
+{
+  "name": "LiveVote Real-time",
+  "description": "A real-time live voting application for events with instant results and interactive charts.",
+  "requestFramePermissions": []
+}
