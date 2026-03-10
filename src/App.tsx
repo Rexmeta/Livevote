@@ -25,7 +25,13 @@ import {
   Trash2,
   ExternalLink,
   Play,
-  FileText
+  FileText,
+  Layout,
+  Target,
+  Trophy,
+  Send,
+  CheckCircle2,
+  Lock
 } from "lucide-react";
 import { 
   BarChart, 
@@ -35,103 +41,40 @@ import {
   CartesianGrid, 
   Tooltip, 
   ResponsiveContainer, 
-  Cell 
+  Cell,
+  PieChart,
+  Pie
 } from "recharts";
 import socket from "./socket";
 import { cn } from "./lib/utils";
-import { Poll, VoteResult, AppView, MediaItem, Team } from "./types";
+import { Poll, VoteResult, AppView, MediaItem, Team, MissionActivity, MissionCard } from "./types";
+import { MISSION_TEMPLATES } from "./constants";
+import { CreateMissionForm, MissionBoard } from "./components/Mission";
+import { Button } from "./components/Button";
+import { Card } from "./components/Card";
+import { Input } from "./components/Input";
+
+// --- Constants ---
 
 // --- Components ---
-
-const Button = ({ 
-  children, 
-  onClick, 
-  variant = "primary", 
-  className,
-  disabled = false,
-  type = "button"
-}: { 
-  children: React.ReactNode; 
-  onClick?: () => void; 
-  variant?: "primary" | "secondary" | "outline" | "ghost";
-  className?: string;
-  disabled?: boolean;
-  type?: "button" | "submit";
-}) => {
-  const variants = {
-    primary: "bg-black text-white hover:bg-zinc-800",
-    secondary: "bg-zinc-100 text-zinc-900 hover:bg-zinc-200",
-    outline: "border border-zinc-200 text-zinc-900 hover:bg-zinc-50",
-    ghost: "text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100"
-  };
-
-  return (
-    <button
-      type={type}
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        "px-4 py-2 rounded-lg font-medium transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed",
-        variants[variant],
-        className
-      )}
-    >
-      {children}
-    </button>
-  );
-};
-
-interface CardProps {
-  children: React.ReactNode;
-  className?: string;
-  onClick?: () => void;
-}
-
-const Card: React.FC<CardProps> = ({ children, className, onClick }) => (
-  <div 
-    onClick={onClick}
-    className={cn("bg-white border border-zinc-200 rounded-2xl p-6 shadow-sm", className)}
-  >
-    {children}
-  </div>
-);
-
-const Input = ({ 
-  value, 
-  onChange, 
-  placeholder, 
-  label,
-  type = "text",
-  className 
-}: { 
-  value: string; 
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void; 
-  placeholder?: string;
-  label?: string;
-  type?: string;
-  className?: string;
-}) => (
-  <div className={cn("space-y-1.5", className)}>
-    {label && <label className="text-xs font-semibold uppercase tracking-wider text-zinc-500 ml-1">{label}</label>}
-    <input
-      type={type}
-      value={value}
-      onChange={onChange}
-      placeholder={placeholder}
-      className="w-full px-4 py-3 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-black/5 focus:border-black transition-all"
-    />
-  </div>
-);
 
 // --- Main App ---
 
 export default function App() {
+  const [topTab, setTopTab] = useState<"vote" | "mission">("vote");
   const [view, setView] = useState<AppView>("home");
   const [currentPollId, setCurrentPollId] = useState<string | null>(null);
+  const [currentMissionId, setCurrentMissionId] = useState<string | null>(null);
   const [currentTeamId, setCurrentTeamId] = useState<string | null>(null);
   const [pollData, setPollData] = useState<Poll | null>(null);
+  const [missionData, setMissionData] = useState<MissionActivity | null>(null);
   const [results, setResults] = useState<VoteResult[]>([]);
   const [activePolls, setActivePolls] = useState<any[]>([]);
+  const [activeMissions, setActiveMissions] = useState<any[]>([]);
+  const [pendingMissionId, setPendingMissionId] = useState<string | null>(null);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [passwordError, setPasswordError] = useState(false);
   const [userId] = useState(() => {
     const saved = localStorage.getItem("vote_user_id");
     if (saved) return saved;
@@ -143,20 +86,140 @@ export default function App() {
   // Fetch active polls for home screen
   useEffect(() => {
     if (view === "home") {
-      fetch("/api/polls")
-        .then(res => res.json())
-        .then(data => setActivePolls(data))
-        .catch(err => console.error("Error fetching active polls:", err));
+      if (topTab === "vote") {
+        fetch("/api/polls")
+          .then(res => res.json())
+          .then(data => setActivePolls(data))
+          .catch(err => console.error("Error fetching active polls:", err));
+      } else {
+        fetch("/api/missions")
+          .then(res => res.json())
+          .then(data => setActiveMissions(data))
+          .catch(err => console.error("Error fetching active missions:", err));
+      }
     }
-  }, [view]);
+  }, [view, topTab]);
 
-  // Check URL for direct poll access
+  // Handle socket events for missions
+  useEffect(() => {
+    socket.on("mission-updated", (data) => {
+      setMissionData(prev => {
+        if (!prev) return null;
+        return { ...prev, ...data };
+      });
+    });
+
+    socket.on("mission-error", (data: { message: string }) => {
+      alert(data.message);
+    });
+
+    return () => {
+      socket.off("mission-updated");
+    };
+  }, []);
+
+  const navigateToMission = (missionId: string) => {
+    const mission = activeMissions.find(m => m.id === missionId);
+    if (mission?.hasPassword) {
+      setPendingMissionId(missionId);
+      setShowPasswordModal(true);
+      setPasswordInput("");
+      setPasswordError(false);
+      return;
+    }
+    
+    setTopTab("mission");
+    setCurrentMissionId(missionId);
+    setMissionData(null); // Reset to show loading spinner
+    setView("results"); // We'll reuse 'results' view for the mission board
+    
+    // Update URL
+    const url = new URL(window.location.href);
+    url.searchParams.set("mission", missionId);
+    url.searchParams.delete("poll");
+    url.searchParams.delete("mode");
+    window.history.pushState({}, "", url);
+
+    socket.emit("join-mission", missionId);
+    fetch(`/api/missions/${missionId}`)
+      .then(res => res.json())
+      .then(data => setMissionData(data))
+      .catch(err => console.error("Error fetching mission:", err));
+  };
+
+  const handlePasswordSubmit = () => {
+    if (!pendingMissionId) return;
+    
+    fetch(`/api/missions/${pendingMissionId}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.joinCode === passwordInput) {
+          setTopTab("mission");
+          setCurrentMissionId(pendingMissionId);
+          setMissionData(null); // Reset to show loading spinner
+          setView("results");
+          setMissionData(data);
+          
+          // Update URL
+          const url = new URL(window.location.href);
+          url.searchParams.set("mission", pendingMissionId);
+          url.searchParams.delete("poll");
+          url.searchParams.delete("mode");
+          window.history.pushState({}, "", url);
+
+          socket.emit("join-mission", pendingMissionId);
+          setShowPasswordModal(false);
+          setPendingMissionId(null);
+        } else {
+          setPasswordError(true);
+        }
+      })
+      .catch(err => console.error("Error verifying password:", err));
+  };
+
+  const handleCreateMission = (config: { title: string; teamCount: number; joinCode?: string }) => {
+    const id = Math.random().toString(36).substring(2, 8).toUpperCase();
+    
+    // Assign templates to cards (cycling through templates if teamCount > 10)
+    const cards: MissionCard[] = Array.from({ length: config.teamCount }).map((_, i) => ({
+      id: `card-${i}-${Date.now()}`,
+      templateId: MISSION_TEMPLATES[i % MISSION_TEMPLATES.length].id,
+      status: "available"
+    }));
+
+    const newMission: MissionActivity = {
+      id,
+      title: config.title,
+      teamCount: config.teamCount,
+      cards,
+      status: "active",
+      joinCode: config.joinCode,
+      createdAt: Date.now()
+    };
+
+    socket.emit("create-mission", newMission);
+    navigateToMission(id);
+  };
+
+  const handleAssignCard = (cardId: string, teamName: string, password?: string) => {
+    if (!currentMissionId) return;
+    socket.emit("assign-mission-card", { missionId: currentMissionId, cardId, teamName, password });
+  };
+
+  const handleSubmitMissionResult = (cardId: string, result: string, password?: string, media?: MediaItem[]) => {
+    if (!currentMissionId) return;
+    socket.emit("submit-mission-result", { missionId: currentMissionId, cardId, result, password, media });
+  };
+
+  // Check URL for direct poll or mission access
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const pollId = params.get("poll");
+    const missionId = params.get("mission");
     const mode = params.get("mode") as AppView;
 
     if (pollId) {
+      setTopTab("vote");
       setCurrentPollId(pollId);
       if (mode === "team-upload") {
         setView("team-upload");
@@ -165,6 +228,15 @@ export default function App() {
       } else {
         setView("vote");
       }
+    } else if (missionId) {
+      setTopTab("mission");
+      setCurrentMissionId(missionId);
+      setView("results");
+      socket.emit("join-mission", missionId);
+      fetch(`/api/missions/${missionId}`)
+        .then(res => res.json())
+        .then(data => setMissionData(data))
+        .catch(err => console.error("Error fetching mission:", err));
     }
   }, []);
 
@@ -220,11 +292,14 @@ export default function App() {
       setCurrentTeamId(null);
     } else {
       url.searchParams.delete("poll");
+      url.searchParams.delete("mission");
       url.searchParams.delete("team");
       url.searchParams.delete("mode");
       setCurrentPollId(null);
+      setCurrentMissionId(null);
       setCurrentTeamId(null);
       setPollData(null);
+      setMissionData(null);
     }
     window.history.pushState({}, "", url);
     setView(newView);
@@ -264,12 +339,18 @@ export default function App() {
     });
   };
 
-  const handleUpdateStatus = (status: Poll["status"]) => {
-    if (!currentPollId) return;
-    socket.emit("update-poll-status", {
-      pollId: currentPollId,
-      status
-    });
+  const handleUpdateStatus = (id: string, status: Poll["status"] | MissionActivity["status"]) => {
+    if (topTab === "vote") {
+      socket.emit("update-poll-status", {
+        pollId: id,
+        status: status as Poll["status"]
+      });
+    } else {
+      socket.emit("update-mission-status", {
+        missionId: id,
+        status: status as MissionActivity["status"]
+      });
+    }
   };
 
   const handleVote = (responses: { questionId: string; teamId?: string; optionIndex: number }[]) => {
@@ -286,30 +367,57 @@ export default function App() {
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900 font-sans selection:bg-black selection:text-white">
       {/* Header */}
-      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-bottom border-zinc-200">
-        <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div 
-            className="flex items-center gap-2 cursor-pointer group"
-            onClick={() => navigateTo("home")}
-          >
-            <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-white group-hover:scale-105 transition-transform">
-              <Zap size={18} fill="currentColor" />
+      <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-zinc-200">
+        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-8">
+            <div 
+              className="flex items-center gap-2 cursor-pointer group"
+              onClick={() => setView("home")}
+            >
+              <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-white group-hover:scale-105 transition-transform">
+                <Vote size={18} />
+              </div>
+              <h1 className="font-bold text-lg tracking-tight">LiveVote</h1>
             </div>
-            <span className="font-bold text-lg tracking-tight">LiveVote</span>
+
+            <nav className="hidden md:flex items-center bg-zinc-100 p-1 rounded-xl">
+              <button 
+                onClick={() => { setTopTab("vote"); setView("home"); }}
+                className={cn(
+                  "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
+                  topTab === "vote" ? "bg-white shadow-sm text-black" : "text-zinc-500 hover:text-zinc-700"
+                )}
+              >
+                <Vote size={16} />
+                Live Vote
+              </button>
+              <button 
+                onClick={() => { setTopTab("mission"); setView("home"); }}
+                className={cn(
+                  "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
+                  topTab === "mission" ? "bg-white shadow-sm text-black" : "text-zinc-500 hover:text-zinc-700"
+                )}
+              >
+                <Target size={16} />
+                Team Mission
+              </button>
+            </nav>
           </div>
-          
-          <div className="flex items-center gap-2">
+
+          <div className="flex items-center gap-3">
             {view !== "home" && (
-              <Button variant="ghost" onClick={() => navigateTo("home")}>
+              <Button variant="ghost" onClick={() => setView("home")}>
                 Home
               </Button>
             )}
-            {view === "home" && (
-              <Button onClick={() => setView("create")}>
-                <Plus size={18} />
-                New Poll
-              </Button>
-            )}
+            <Button 
+              variant="primary" 
+              className="rounded-full px-6"
+              onClick={() => setView("create")}
+            >
+              <Plus size={18} />
+              <span className="hidden sm:inline">Create {topTab === "vote" ? "Poll" : "Mission"}</span>
+            </Button>
           </div>
         </div>
       </header>
@@ -324,83 +432,127 @@ export default function App() {
               exit={{ opacity: 0, y: -20 }}
               className="space-y-12"
             >
-              <div className="text-center space-y-6">
-                <motion.h1 
-                  className="text-5xl md:text-7xl font-bold tracking-tighter leading-[0.9]"
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.1 }}
-                >
-                  REAL-TIME <br />
-                  <span className="text-zinc-400 italic font-serif font-light">VOTING</span> FOR EVENTS
-                </motion.h1>
-                <p className="text-zinc-500 text-lg max-w-xl mx-auto">
-                  Create instant polls, share with a link, and watch results roll in live. 
-                  Perfect for presentations, meetups, and workshops.
+              <div className="max-w-2xl">
+                <h2 className="text-5xl sm:text-6xl font-black tracking-tighter leading-[0.9] mb-6">
+                  {topTab === "vote" ? "REAL-TIME VOTING MADE SIMPLE." : "TEAM MISSIONS FOR COLLABORATION."}
+                </h2>
+                <p className="text-xl text-zinc-500 font-medium leading-relaxed">
+                  {topTab === "vote" 
+                    ? "Engage your audience with live polls, popularity contests, and instant results."
+                    : "Assign creative tasks to teams and share results in real-time."}
                 </p>
-                <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
+                <div className="flex flex-col sm:flex-row items-center gap-4 pt-8">
                   <Button 
                     className="w-full sm:w-auto px-8 py-4 text-lg rounded-2xl" 
                     onClick={() => setView("create")}
                   >
-                    Create a Poll
+                    Create a {topTab === "vote" ? "Poll" : "Mission"}
                   </Button>
-                  <JoinPollBox onJoin={(id) => navigateTo("vote", id)} />
+                  {topTab === "vote" && <JoinPollBox onJoin={(id) => navigateTo("vote", id)} />}
                 </div>
               </div>
 
-              {activePolls.length > 0 && (
-                <div className="space-y-6">
-                  <h2 className="text-xs font-bold uppercase tracking-widest text-zinc-400 text-center">Active Polls</h2>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {activePolls.map(poll => (
-                      <Card 
-                        key={poll.id} 
-                        className="cursor-pointer hover:border-black transition-all group relative overflow-hidden"
-                        onClick={() => {
-                          if (poll.status === "setup" && poll.type === "popularity") {
-                            navigateTo("team-upload", poll.id);
-                          } else {
-                            navigateTo("vote", poll.id);
-                          }
-                        }}
-                      >
-                        <div className="flex justify-between items-start mb-2">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {topTab === "vote" ? (
+                  activePolls.map((poll) => (
+                    <Card 
+                      key={poll.id} 
+                      className="group hover:border-black transition-all cursor-pointer p-8 flex flex-col justify-between aspect-square"
+                      onClick={() => {
+                        if (poll.type === "popularity" && poll.status === "setup") {
+                          navigateTo("team-upload", poll.id);
+                        } else {
+                          navigateTo("vote", poll.id);
+                        }
+                      }}
+                    >
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-start">
                           <div className={cn(
-                            "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
-                            poll.type === "popularity" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"
+                            "px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase",
+                            poll.type === "popularity" ? "bg-blue-100 text-blue-600" : "bg-zinc-100 text-zinc-600"
                           )}>
                             {poll.type}
                           </div>
-                          <span className="text-[10px] font-mono text-zinc-400">#{poll.joinCode}</span>
+                          <div className="text-xs font-bold text-zinc-300">#{poll.id}</div>
                         </div>
-                        <h3 className="font-bold group-hover:text-black transition-colors">{poll.title}</h3>
-                        <div className="mt-4 flex items-center gap-1 text-xs text-zinc-400 font-medium">
-                          <Users size={12} />
-                          <span>{poll.status === "voting" ? "Voting Live" : "Registration Open"}</span>
+                        <h3 className="text-2xl font-bold leading-tight group-hover:underline decoration-2 underline-offset-4">
+                          {poll.title}
+                        </h3>
+                      </div>
+                      
+                      <div className="flex items-center justify-between pt-6 border-t border-zinc-100">
+                        <div className="flex items-center gap-2 text-zinc-400">
+                          <BarChart3 size={16} />
+                          <span className="text-xs font-bold uppercase tracking-widest">View Results</span>
                         </div>
-                      </Card>
-                    ))}
-                  </div>
-                </div>
-              )}
+                        <div className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center group-hover:bg-black group-hover:text-white transition-all">
+                          <ChevronRight size={20} />
+                        </div>
+                      </div>
+                    </Card>
+                  ))
+                ) : (
+                  activeMissions.map((mission) => (
+                    <Card 
+                      key={mission.id} 
+                      className="group hover:border-emerald-500 transition-all cursor-pointer p-8 flex flex-col justify-between aspect-square"
+                      onClick={() => navigateToMission(mission.id)}
+                    >
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-start">
+                          <div className="flex items-center gap-2">
+                            {mission.hasPassword && <Lock size={12} className="text-emerald-600" />}
+                            <div className={cn(
+                              "px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase",
+                              mission.status === "closed" ? "bg-zinc-200 text-zinc-600" : "bg-emerald-100 text-emerald-600"
+                            )}>
+                              {mission.status === "closed" ? "Completed" : "Mission"}
+                            </div>
+                          </div>
+                          <div className="text-xs font-bold text-zinc-300">#{mission.id}</div>
+                        </div>
+                        <h3 className="text-2xl font-bold leading-tight group-hover:underline decoration-2 underline-offset-4">
+                          {mission.title}
+                        </h3>
+                        <div className="flex items-center gap-2 text-zinc-400">
+                          <Users size={16} />
+                          <span className="text-xs font-bold uppercase tracking-widest">{mission.teamCount} Teams Participating</span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center justify-between pt-6 border-t border-zinc-100">
+                        <div className="flex items-center gap-2 text-zinc-400">
+                          {mission.status === "closed" ? <Trophy size={16} /> : <Target size={16} />}
+                          <span className="text-xs font-bold uppercase tracking-widest">
+                            {mission.status === "closed" ? "View Results" : "Enter Mission Board"}
+                          </span>
+                        </div>
+                        <div className={cn(
+                          "w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center transition-all",
+                          mission.status === "closed" 
+                            ? "group-hover:bg-zinc-800 group-hover:text-white" 
+                            : "group-hover:bg-emerald-500 group-hover:text-white"
+                        )}>
+                          <ChevronRight size={20} />
+                        </div>
+                      </div>
+                    </Card>
+                  ))
+                )}
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-12">
-                <FeatureCard 
-                  icon={<Zap className="text-amber-500" />}
-                  title="Instant Setup"
-                  description="No account required. Create a poll in seconds and start collecting votes."
-                />
-                <FeatureCard 
-                  icon={<BarChart3 className="text-blue-500" />}
-                  title="Live Results"
-                  description="Watch the charts update in real-time as your audience casts their votes."
-                />
-                <FeatureCard 
-                  icon={<Users className="text-emerald-500" />}
-                  title="Unlimited Users"
-                  description="Scale from a small meeting to a large conference without missing a beat."
-                />
+                <Card 
+                  className="border-dashed border-2 border-zinc-200 bg-transparent hover:border-black hover:bg-zinc-50 transition-all cursor-pointer flex flex-col items-center justify-center gap-4 aspect-square"
+                  onClick={() => setView("create")}
+                >
+                  <div className="w-12 h-12 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-400">
+                    <Plus size={24} />
+                  </div>
+                  <div className="text-center">
+                    <div className="font-bold">Create New {topTab === "vote" ? "Poll" : "Mission"}</div>
+                    <div className="text-xs text-zinc-400 font-medium">Start a new activity in seconds</div>
+                  </div>
+                </Card>
               </div>
             </motion.div>
           )}
@@ -413,10 +565,17 @@ export default function App() {
               exit={{ opacity: 0, x: -20 }}
               className="max-w-xl mx-auto"
             >
-              <CreatePollForm 
-                onSubmit={handleCreatePoll} 
-                onCancel={() => setView("home")} 
-              />
+              {topTab === "vote" ? (
+                <CreatePollForm 
+                  onSubmit={handleCreatePoll} 
+                  onCancel={() => setView("home")} 
+                />
+              ) : (
+                <CreateMissionForm 
+                  onSubmit={handleCreateMission}
+                  onCancel={() => setView("home")}
+                />
+              )}
             </motion.div>
           )}
 
@@ -436,7 +595,7 @@ export default function App() {
             </motion.div>
           )}
 
-          {view === "results" && pollData && (
+          {view === "results" && (
             <motion.div
               key="results"
               initial={{ opacity: 0 }}
@@ -444,12 +603,26 @@ export default function App() {
               exit={{ opacity: 0 }}
               className="space-y-8"
             >
-              <ResultsDashboard 
-                poll={pollData} 
-                results={results} 
-                onVoteAgain={() => navigateTo("vote", currentPollId!)}
-                onUpdateStatus={handleUpdateStatus}
-              />
+              {topTab === "vote" && pollData ? (
+                <ResultsDashboard 
+                  poll={pollData} 
+                  results={results} 
+                  onVoteAgain={() => navigateTo("vote", currentPollId!)}
+                  onUpdateStatus={handleUpdateStatus}
+                />
+              ) : topTab === "mission" && missionData ? (
+                <MissionBoard
+                  mission={missionData}
+                  onUpdateStatus={(status) => handleUpdateStatus(missionData.id, status)}
+                  onAssignCard={handleAssignCard}
+                  onSubmitResult={handleSubmitMissionResult}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-20 gap-4">
+                  <div className="w-12 h-12 border-4 border-black border-t-transparent rounded-full animate-spin" />
+                  <p className="text-zinc-500 font-medium">Loading activity data...</p>
+                </div>
+              )}
             </motion.div>
           )}
 
@@ -482,6 +655,75 @@ export default function App() {
           </p>
         </div>
       </footer>
+
+      {/* Password Modal */}
+      <AnimatePresence>
+        {showPasswordModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="w-full max-w-sm"
+            >
+              <Card className="p-8 space-y-6 shadow-2xl">
+                <div className="space-y-2 text-center">
+                  <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+                    <Zap size={24} />
+                  </div>
+                  <h3 className="text-xl font-black uppercase tracking-tight">Access Required</h3>
+                  <p className="text-zinc-500 text-sm font-medium">This mission activity is password protected.</p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Enter Password</label>
+                    <Input 
+                      type="password"
+                      value={passwordInput}
+                      onChange={(e) => {
+                        setPasswordInput(e.target.value);
+                        setPasswordError(false);
+                      }}
+                      placeholder="••••"
+                      className={cn(
+                        "text-center text-2xl tracking-[0.5em] font-black",
+                        passwordError && "border-red-500 ring-red-500"
+                      )}
+                      autoFocus
+                      onKeyDown={(e) => e.key === "Enter" && handlePasswordSubmit()}
+                    />
+                    {passwordError && (
+                      <p className="text-xs text-red-500 font-bold text-center">Incorrect password. Please try again.</p>
+                    )}
+                  </div>
+
+                  <div className="flex gap-2">
+                    <Button 
+                      variant="ghost" 
+                      className="flex-1"
+                      onClick={() => {
+                        setShowPasswordModal(false);
+                        setPendingMissionId(null);
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button 
+                      variant="primary" 
+                      className="flex-1"
+                      onClick={handlePasswordSubmit}
+                      disabled={!passwordInput}
+                    >
+                      Enter
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -807,6 +1049,18 @@ function TeamRegistrationView({ poll, onRegister }: { poll: Poll; onRegister: (t
     setMedia(media.filter((_, i) => i !== index));
   };
 
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: "image" | "video") => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64String = reader.result as string;
+      setMedia(prev => [...prev, { type, url: base64String, title: file.name }]);
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleSubmit = () => {
     if (!teamName.trim()) return;
     onRegister(teamName, media);
@@ -851,40 +1105,69 @@ function TeamRegistrationView({ poll, onRegister }: { poll: Poll; onRegister: (t
 
         <div className="space-y-4 p-6 bg-zinc-50 rounded-2xl border border-zinc-200">
           <h3 className="text-sm font-bold uppercase tracking-widest text-zinc-400">Project Materials</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {(["image", "video", "audio", "link"] as const).map(type => (
-              <button
-                key={type}
-                onClick={() => setNewType(type)}
-                className={cn(
-                  "flex flex-col items-center gap-2 p-3 rounded-xl border-2 transition-all",
-                  newType === type ? "border-black bg-white shadow-sm" : "border-transparent text-zinc-400 hover:text-zinc-600"
-                )}
-              >
-                {type === "image" && <ImageIcon size={20} />}
-                {type === "video" && <Video size={20} />}
-                {type === "audio" && <Music size={20} />}
-                {type === "link" && <LinkIcon size={20} />}
-                <span className="text-[10px] font-bold uppercase">{type}</span>
-              </button>
-            ))}
-          </div>
           
-          <div className="space-y-3">
-            <Input 
-              placeholder="Resource URL (e.g. https://...)" 
-              value={newUrl} 
-              onChange={(e) => setNewUrl(e.target.value)} 
-            />
-            <Input 
-              placeholder="Title (optional)" 
-              value={newTitle} 
-              onChange={(e) => setNewTitle(e.target.value)} 
-            />
-            <Button variant="outline" className="w-full py-3 bg-white" onClick={addMedia} disabled={!newUrl}>
-              <Plus size={18} />
-              Add to Gallery
-            </Button>
+          <div className="flex flex-wrap gap-3 mb-6">
+            {media.map((item, i) => (
+              <div key={i} className="relative w-24 h-24 rounded-2xl overflow-hidden bg-white shadow-sm border border-zinc-200 group">
+                {item.type === "image" ? (
+                  <img src={item.url} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center bg-zinc-800 text-white">
+                    <Video size={24} />
+                  </div>
+                )}
+                <button 
+                  onClick={() => removeMedia(i)}
+                  className="absolute top-1 right-1 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+            
+            <label className="w-24 h-24 rounded-2xl border-2 border-dashed border-zinc-200 flex flex-col items-center justify-center gap-1 cursor-pointer hover:border-black hover:bg-zinc-50 transition-all">
+              <ImageIcon size={24} className="text-zinc-400" />
+              <span className="text-[10px] font-bold uppercase">Image</span>
+              <input type="file" accept="image/*" className="hidden" onChange={(e) => handleFileUpload(e, "image")} />
+            </label>
+            
+            <label className="w-24 h-24 rounded-2xl border-2 border-dashed border-zinc-200 flex flex-col items-center justify-center gap-1 cursor-pointer hover:border-black hover:bg-zinc-50 transition-all">
+              <Video size={24} className="text-zinc-400" />
+              <span className="text-[10px] font-bold uppercase">Video</span>
+              <input type="file" accept="video/*" className="hidden" onChange={(e) => handleFileUpload(e, "video")} />
+            </label>
+          </div>
+
+          <div className="space-y-4 border-t border-zinc-200 pt-6">
+            <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Or Add via Link</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {(["image", "video", "audio", "link"] as const).map(type => (
+                <button
+                  key={type}
+                  onClick={() => setNewType(type)}
+                  className={cn(
+                    "flex flex-col items-center gap-2 p-3 rounded-xl border-2 transition-all",
+                    newType === type ? "border-black bg-white shadow-sm" : "border-transparent text-zinc-400 hover:text-zinc-600"
+                  )}
+                >
+                  {type === "image" && <ImageIcon size={20} />}
+                  {type === "video" && <Video size={20} />}
+                  {type === "audio" && <Music size={20} />}
+                  {type === "link" && <LinkIcon size={20} />}
+                  <span className="text-[10px] font-bold uppercase">{type}</span>
+                </button>
+              ))}
+            </div>
+            
+            <div className="flex gap-2">
+              <Input 
+                placeholder="Resource URL (e.g. https://...)" 
+                value={newUrl} 
+                onChange={(e) => setNewUrl(e.target.value)} 
+                className="flex-1"
+              />
+              <Button variant="outline" onClick={addMedia} disabled={!newUrl} className="mt-6">Add</Button>
+            </div>
           </div>
         </div>
 
@@ -1226,7 +1509,7 @@ function VoteInterface({ poll, onVote, onViewResults }: { poll: Poll; onVote: (r
   );
 }
 
-function ResultsDashboard({ poll, results, onVoteAgain, onUpdateStatus }: { poll: Poll; results: VoteResult[]; onVoteAgain: () => void; onUpdateStatus: (status: Poll["status"]) => void }) {
+function ResultsDashboard({ poll, results, onVoteAgain, onUpdateStatus }: { poll: Poll; results: VoteResult[]; onVoteAgain: () => void; onUpdateStatus: (id: string, status: Poll["status"]) => void }) {
   const [copied, setCopied] = useState(false);
   const [copiedTeamId, setCopiedTeamId] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState<string>("");
@@ -1311,17 +1594,17 @@ function ResultsDashboard({ poll, results, onVoteAgain, onUpdateStatus }: { poll
 
         <div className="flex flex-wrap gap-2">
           {poll.status === "setup" && (
-            <Button onClick={() => onUpdateStatus("voting")} className="bg-emerald-600 hover:bg-emerald-700">
+            <Button onClick={() => onUpdateStatus(poll.id, "voting")} className="bg-emerald-600 hover:bg-emerald-700">
               Start Voting
             </Button>
           )}
           {poll.status === "voting" && (
-            <Button onClick={() => onUpdateStatus("closed")} variant="outline">
+            <Button onClick={() => onUpdateStatus(poll.id, "closed")} variant="outline">
               Close Voting
             </Button>
           )}
           {poll.status === "closed" && (
-            <Button onClick={() => onUpdateStatus("voting")} variant="outline">
+            <Button onClick={() => onUpdateStatus(poll.id, "voting")} variant="outline">
               Reopen Voting
             </Button>
           )}

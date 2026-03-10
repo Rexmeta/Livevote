@@ -17,6 +17,34 @@ export interface Question {
   options: string[];
 }
 
+export interface MissionTemplate {
+  id: string;
+  cardTitle: string;
+  mission: string;
+  teamTask: string;
+  example?: string;
+}
+
+export interface MissionCard {
+  id: string;
+  templateId: string;
+  teamName?: string;
+  password?: string;
+  result?: string;
+  media?: MediaItem[];
+  status: "available" | "assigned" | "completed";
+}
+
+export interface MissionActivity {
+  id: string;
+  title: string;
+  teamCount: number;
+  cards: MissionCard[];
+  status: "active" | "closed";
+  joinCode?: string;
+  createdAt: number;
+}
+
 export interface Poll {
   id: string;
   type: "general" | "popularity";

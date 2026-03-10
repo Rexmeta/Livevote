@@ -13,10 +13,7 @@ const db = new Database("voting.db");
 
 // Initialize Database
 db.exec(`
-  DROP TABLE IF EXISTS votes;
-  DROP TABLE IF EXISTS polls;
-
-  CREATE TABLE polls (
+  CREATE TABLE IF NOT EXISTS polls (
     id TEXT PRIMARY KEY,
     type TEXT DEFAULT 'general',
     title TEXT NOT NULL,
@@ -28,7 +25,7 @@ db.exec(`
     deadline INTEGER,
     createdAt INTEGER NOT NULL
   );
-  CREATE TABLE votes (
+  CREATE TABLE IF NOT EXISTS votes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     pollId TEXT NOT NULL,
     questionId TEXT NOT NULL,
@@ -38,12 +35,29 @@ db.exec(`
     createdAt INTEGER NOT NULL,
     FOREIGN KEY (pollId) REFERENCES polls(id)
   );
+  CREATE TABLE IF NOT EXISTS missions (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    teamCount INTEGER NOT NULL,
+    cards TEXT NOT NULL,
+    status TEXT DEFAULT 'active',
+    joinCode TEXT,
+    createdAt INTEGER NOT NULL,
+    closedAt INTEGER
+  );
 `);
+
+try {
+  db.prepare("ALTER TABLE missions ADD COLUMN closedAt INTEGER").run();
+} catch (e) {
+  // Column already exists
+}
 
 async function startServer() {
   const app = express();
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
+    maxHttpBufferSize: 1e8, // 100MB for media uploads
     cors: {
       origin: "*",
     },
@@ -73,6 +87,27 @@ async function startServer() {
     });
   });
 
+  app.get("/api/missions", (req, res) => {
+    const threeDaysAgo = Date.now() - (3 * 24 * 60 * 60 * 1000);
+    const missions = db.prepare(`
+      SELECT id, title, teamCount, status, (joinCode IS NOT NULL) as hasPassword 
+      FROM missions 
+      WHERE status != 'closed' OR (status = 'closed' AND closedAt > ?)
+      ORDER BY createdAt DESC
+    `).all(threeDaysAgo);
+    res.json(missions);
+  });
+
+  app.get("/api/missions/:id", (req, res) => {
+    const mission = db.prepare("SELECT * FROM missions WHERE id = ?").get(req.params.id) as any;
+    if (!mission) return res.status(404).json({ error: "Mission not found" });
+    
+    res.json({
+      ...mission,
+      cards: JSON.parse(mission.cards)
+    });
+  });
+
   // Socket.io Logic
   io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
@@ -89,6 +124,65 @@ async function startServer() {
       db.prepare("INSERT INTO polls (id, type, title, questions, teams, joinCode, registrationCode, deadline, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .run(id, type || 'general', title, JSON.stringify(questions), JSON.stringify(teams || []), joinCode, registrationCode, deadline, Date.now());
       console.log("Poll created:", id, type);
+    });
+
+    socket.on("create-mission", (missionData) => {
+      const { id, title, teamCount, cards, joinCode } = missionData;
+      db.prepare("INSERT INTO missions (id, title, teamCount, cards, joinCode, createdAt) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(id, title, teamCount, JSON.stringify(cards), joinCode || null, Date.now());
+      console.log("Mission created:", id);
+    });
+
+    socket.on("join-mission", (missionId) => {
+      socket.join(missionId);
+    });
+
+    socket.on("assign-mission-card", (data) => {
+      const { missionId, cardId, teamName, password } = data;
+      const mission = db.prepare("SELECT cards FROM missions WHERE id = ?").get(missionId) as any;
+      if (mission) {
+        const cards = JSON.parse(mission.cards);
+        const cardIndex = cards.findIndex((c: any) => c.id === cardId);
+        if (cardIndex !== -1 && cards[cardIndex].status === "available") {
+          cards[cardIndex].teamName = teamName;
+          cards[cardIndex].password = password; // Store card password
+          cards[cardIndex].status = "assigned";
+          db.prepare("UPDATE missions SET cards = ? WHERE id = ?").run(JSON.stringify(cards), missionId);
+          io.to(missionId).emit("mission-updated", { cards });
+        }
+      }
+    });
+
+    socket.on("submit-mission-result", (data) => {
+      const { missionId, cardId, result, media, password } = data;
+      const mission = db.prepare("SELECT cards FROM missions WHERE id = ?").get(missionId) as any;
+      if (mission) {
+        const cards = JSON.parse(mission.cards);
+        const cardIndex = cards.findIndex((c: any) => c.id === cardId);
+        if (cardIndex !== -1) {
+          // Verify password if it exists
+          if (cards[cardIndex].password && cards[cardIndex].password !== password) {
+            socket.emit("mission-error", { message: "Invalid card password" });
+            return;
+          }
+          cards[cardIndex].result = result;
+          cards[cardIndex].media = media; // Store media attachments
+          cards[cardIndex].status = "completed";
+          db.prepare("UPDATE missions SET cards = ? WHERE id = ?").run(JSON.stringify(cards), missionId);
+          io.to(missionId).emit("mission-updated", { cards });
+        }
+      }
+    });
+
+    socket.on("update-mission-status", (data) => {
+      const { missionId, status } = data;
+      const closedAt = status === "closed" ? Date.now() : null;
+      if (status === "closed") {
+        db.prepare("UPDATE missions SET status = ?, closedAt = ? WHERE id = ?").run(status, closedAt, missionId);
+      } else {
+        db.prepare("UPDATE missions SET status = ? WHERE id = ?").run(status, missionId);
+      }
+      io.to(missionId).emit("mission-updated", { status, closedAt });
     });
 
     socket.on("register-team", (data) => {
