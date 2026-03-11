@@ -65,4 +65,10 @@ export interface VoteResult {
   count: number;
 }
 
-export type AppView = "home" | "create" | "vote" | "results" | "team-upload";
+export interface User {
+  id: string;
+  email: string;
+  role: "user" | "admin";
+}
+
+export type AppView = "home" | "create" | "vote" | "results" | "team-upload" | "admin" | "auth";

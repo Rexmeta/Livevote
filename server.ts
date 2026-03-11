@@ -5,9 +5,13 @@ import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const JWT_SECRET = process.env.JWT_SECRET || "super-secret-key";
 
 const db = new Database("voting.db");
 
@@ -45,7 +49,32 @@ db.exec(`
     createdAt INTEGER NOT NULL,
     closedAt INTEGER
   );
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT UNIQUE,
+    password TEXT,
+    role TEXT DEFAULT 'user',
+    createdAt INTEGER NOT NULL
+  );
 `);
+
+// Schema Migration: Ensure users table has email and password columns if it already existed
+try {
+  const tableInfo = db.prepare("PRAGMA table_info(users)").all() as any[];
+  const hasEmail = tableInfo.some(col => col.name === 'email');
+  const hasPassword = tableInfo.some(col => col.name === 'password');
+  
+  if (!hasEmail) {
+    // SQLite ALTER TABLE does not support UNIQUE constraint on ADD COLUMN
+    db.prepare("ALTER TABLE users ADD COLUMN email TEXT").run();
+    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)").run();
+  }
+  if (!hasPassword) {
+    db.prepare("ALTER TABLE users ADD COLUMN password TEXT").run();
+  }
+} catch (err) {
+  console.error("Schema migration error:", err);
+}
 
 try {
   db.prepare("ALTER TABLE missions ADD COLUMN closedAt INTEGER").run();
@@ -66,6 +95,121 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json());
+
+  // Auth Endpoints
+  app.post("/api/auth/signup", async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email and password are required" });
+
+    try {
+      const existingUser = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+      if (existingUser) return res.status(400).json({ error: "Email already exists" });
+
+      const userCount = (db.prepare("SELECT COUNT(*) as count FROM users").get() as any).count;
+      const role = userCount === 0 ? 'admin' : 'user';
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const userId = Math.random().toString(36).substring(2, 15);
+
+      db.prepare("INSERT INTO users (id, email, password, role, createdAt) VALUES (?, ?, ?, ?, ?)").run(
+        userId, email, hashedPassword, role, Date.now()
+      );
+
+      const token = jwt.sign({ userId, role }, JWT_SECRET);
+      res.json({ user: { id: userId, email, role }, token });
+    } catch (err) {
+      console.error("Signup error:", err);
+      res.status(500).json({ error: "Internal server error: " + (err instanceof Error ? err.message : String(err)) });
+    }
+  });
+
+  app.post("/api/auth/login", async (req, res) => {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email and password are required" });
+
+    try {
+      const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
+      if (!user) return res.status(401).json({ error: "Invalid credentials" });
+
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) return res.status(401).json({ error: "Invalid credentials" });
+
+      const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET);
+      res.json({ user: { id: user.id, email: user.email, role: user.role }, token });
+    } catch (err) {
+      console.error("Login error:", err);
+      res.status(500).json({ error: "Internal server error: " + (err instanceof Error ? err.message : String(err)) });
+    }
+  });
+
+  app.get("/api/auth/me", (req, res) => {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as any;
+      const user = db.prepare("SELECT id, email, role FROM users WHERE id = ?").get(decoded.userId) as any;
+      if (!user) return res.status(401).json({ error: "User not found" });
+      res.json(user);
+    } catch (err) {
+      res.status(401).json({ error: "Invalid token" });
+    }
+  });
+
+  // User Endpoints
+  app.post("/api/users/check", (req, res) => {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: "userId is required" });
+
+    let user = db.prepare("SELECT id, role FROM users WHERE id = ?").get(userId) as any;
+    
+    if (!user) {
+      // For backward compatibility or anonymous users if we want, 
+      // but the user asked for formal login/signup for creation.
+      // We'll return 404 if not found now to force login for some actions.
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json(user);
+  });
+
+  // Admin Middleware
+  const isAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) return res.status(401).json({ error: "Unauthorized" });
+
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as any;
+      if (decoded.role === 'admin') {
+        next();
+      } else {
+        res.status(403).json({ error: "Forbidden" });
+      }
+    } catch (err) {
+      res.status(401).json({ error: "Invalid token" });
+    }
+  };
+
+  // Admin Endpoints
+  app.get("/api/admin/polls", isAdmin, (req, res) => {
+    const polls = db.prepare("SELECT * FROM polls ORDER BY createdAt DESC").all();
+    res.json(polls);
+  });
+
+  app.delete("/api/admin/polls/:id", isAdmin, (req, res) => {
+    db.prepare("DELETE FROM votes WHERE pollId = ?").run(req.params.id);
+    db.prepare("DELETE FROM polls WHERE id = ?").run(req.params.id);
+    res.json({ success: true });
+  });
+
+  app.get("/api/admin/missions", isAdmin, (req, res) => {
+    const missions = db.prepare("SELECT * FROM missions ORDER BY createdAt DESC").all();
+    res.json(missions);
+  });
+
+  app.delete("/api/admin/missions/:id", isAdmin, (req, res) => {
+    db.prepare("DELETE FROM missions WHERE id = ?").run(req.params.id);
+    res.json({ success: true });
+  });
 
   // API Routes
   app.get("/api/polls", (req, res) => {

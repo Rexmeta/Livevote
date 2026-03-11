@@ -16,9 +16,11 @@ import {
   Trash2,
   Link as LinkIcon,
   Play,
-  ExternalLink
+  ExternalLink,
+  Maximize2
 } from "lucide-react";
 import { cn } from "../lib/utils";
+import { openMediaInNewTab } from "../lib/mediaUtils";
 import { Button } from "./Button";
 import { Card } from "./Card";
 import { MissionActivity, MissionCard, MediaItem } from "../types";
@@ -105,13 +107,15 @@ interface MissionBoardProps {
   onUpdateStatus: (status: string) => void;
   onAssignCard: (cardId: string, teamName: string, password?: string) => void;
   onSubmitResult: (cardId: string, result: string, password?: string, media?: MediaItem[]) => void;
+  onViewMedia: (item: MediaItem) => void;
 }
 
 export const MissionBoard: React.FC<MissionBoardProps> = ({ 
   mission, 
   onUpdateStatus,
   onAssignCard,
-  onSubmitResult
+  onSubmitResult,
+  onViewMedia
 }) => {
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [teamName, setTeamName] = useState("");
@@ -225,15 +229,37 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
                             ) : (
                               <video src={item.url} controls className="w-full h-full object-cover" />
                             )}
-                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/media:opacity-100 transition-opacity flex items-center justify-center">
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                className="text-white"
-                                onClick={() => window.open(item.url, "_blank")}
-                              >
-                                <ExternalLink size={16} />
-                              </Button>
+                            <div 
+                              className="absolute inset-0 bg-black/40 opacity-0 group-hover/media:opacity-100 transition-opacity flex items-center justify-center gap-2 cursor-pointer"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onViewMedia(item);
+                              }}
+                            >
+                              <div className="flex items-center justify-center gap-2">
+                                <Button 
+                                  variant="ghost" 
+                                  size="sm" 
+                                  className="text-white bg-white/10 backdrop-blur-sm rounded-full w-10 h-10 p-0 hover:bg-white/20"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onViewMedia(item);
+                                  }}
+                                >
+                                  <Maximize2 size={18} />
+                                </Button>
+                                <Button 
+                                  variant="ghost" 
+                                  size="sm" 
+                                  className="text-white bg-white/10 backdrop-blur-sm rounded-full w-10 h-10 p-0 hover:bg-white/20"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openMediaInNewTab(item.url);
+                                  }}
+                                >
+                                  <ExternalLink size={18} />
+                                </Button>
+                              </div>
                             </div>
                           </div>
                         ))}
@@ -526,15 +552,37 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
                                 ) : (
                                   <video src={item.url} controls className="w-full h-full object-cover" />
                                 )}
-                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/media:opacity-100 transition-opacity flex items-center justify-center">
-                                  <Button 
-                                    variant="ghost" 
-                                    size="sm" 
-                                    className="text-white"
-                                    onClick={() => window.open(item.url, "_blank")}
-                                  >
-                                    <ExternalLink size={16} />
-                                  </Button>
+                                <div 
+                                  className="absolute inset-0 bg-black/40 opacity-0 group-hover/media:opacity-100 transition-opacity flex items-center justify-center gap-2 cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onViewMedia(item);
+                                  }}
+                                >
+                                  <div className="flex items-center justify-center gap-2">
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="text-white bg-white/10 backdrop-blur-sm rounded-full w-10 h-10 p-0 hover:bg-white/20"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onViewMedia(item);
+                                      }}
+                                    >
+                                      <Maximize2 size={18} />
+                                    </Button>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="sm" 
+                                      className="text-white bg-white/10 backdrop-blur-sm rounded-full w-10 h-10 p-0 hover:bg-white/20"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openMediaInNewTab(item.url);
+                                      }}
+                                    >
+                                      <ExternalLink size={18} />
+                                    </Button>
+                                  </div>
                                 </div>
                               </div>
                             ))}

@@ -31,7 +31,12 @@ import {
   Trophy,
   Send,
   CheckCircle2,
-  Lock
+  Lock,
+  Shield,
+  Settings,
+  Maximize2,
+  LogOut,
+  Home
 } from "lucide-react";
 import { 
   BarChart, 
@@ -47,9 +52,11 @@ import {
 } from "recharts";
 import socket from "./socket";
 import { cn } from "./lib/utils";
-import { Poll, VoteResult, AppView, MediaItem, Team, MissionActivity, MissionCard } from "./types";
+import { openMediaInNewTab } from "./lib/mediaUtils";
+import { Poll, VoteResult, AppView, MediaItem, Team, MissionActivity, MissionCard, User } from "./types";
 import { MISSION_TEMPLATES } from "./constants";
 import { CreateMissionForm, MissionBoard } from "./components/Mission";
+import { MediaViewer } from "./components/MediaViewer";
 import { Button } from "./components/Button";
 import { Card } from "./components/Card";
 import { Input } from "./components/Input";
@@ -57,6 +64,243 @@ import { Input } from "./components/Input";
 // --- Constants ---
 
 // --- Components ---
+
+// --- Admin Dashboard ---
+
+function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (view: AppView, id?: string) => void }) {
+  const [polls, setPolls] = useState<any[]>([]);
+  const [missions, setMissions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const [pollsRes, missionsRes] = await Promise.all([
+        fetch("/api/admin/polls", { headers: { "Authorization": `Bearer ${token}` } }),
+        fetch("/api/admin/missions", { headers: { "Authorization": `Bearer ${token}` } })
+      ]);
+      const pollsData = await pollsRes.json();
+      const missionsData = await missionsRes.json();
+      setPolls(pollsData);
+      setMissions(missionsData);
+    } catch (err) {
+      console.error("Error fetching admin data:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const deletePoll = async (id: string) => {
+    await fetch(`/api/admin/polls/${id}`, { 
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+    fetchData();
+  };
+
+  const deleteMission = async (id: string) => {
+    await fetch(`/api/admin/missions/${id}`, { 
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${token}` }
+    });
+    fetchData();
+  };
+
+  if (loading) return <div className="flex justify-center py-20"><Clock className="animate-spin text-zinc-300" size={48} /></div>;
+
+  return (
+    <div className="space-y-12">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-4xl font-black tracking-tighter">ADMIN DASHBOARD</h2>
+          <p className="text-zinc-500 font-medium">Manage all active and past activities</p>
+        </div>
+        <Button onClick={fetchData} variant="ghost">Refresh</Button>
+      </div>
+
+      <div className="space-y-8">
+        <section>
+          <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+            <Vote size={20} />
+            Polls ({polls.length})
+          </h3>
+          <div className="grid gap-4">
+            {polls.map(poll => (
+              <Card key={poll.id} className="p-4 flex items-center justify-between">
+                <div>
+                  <div className="font-bold">{poll.title}</div>
+                  <div className="text-xs text-zinc-400">ID: {poll.id} • Status: {poll.status} • Created: {new Date(poll.createdAt).toLocaleDateString()}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => onNavigate("results", poll.id)}>View</Button>
+                  <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-600" onClick={() => {
+                    if (window.confirm("Delete this poll?")) deletePoll(poll.id);
+                  }}>
+                    <Trash2 size={16} />
+                  </Button>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+            <Target size={20} />
+            Missions ({missions.length})
+          </h3>
+          <div className="grid gap-4">
+            {missions.map(mission => (
+              <Card key={mission.id} className="p-4 flex items-center justify-between">
+                <div>
+                  <div className="font-bold">{mission.title}</div>
+                  <div className="text-xs text-zinc-400">ID: {mission.id} • Status: {mission.status} • Teams: {mission.teamCount}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => {
+                    const url = new URL(window.location.href);
+                    url.searchParams.set("mission", mission.id);
+                    window.history.pushState({}, "", url);
+                    // Instead of reload, we should ideally have a way to trigger the URL check logic
+                    // For now, let's just navigate to home and then the URL check might handle it if we are lucky
+                    // Or better, just call the navigateToMission logic if we had access to it.
+                    // Since we are in a subcomponent, we can pass it down.
+                    window.location.reload(); 
+                  }}>View</Button>
+                  <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-600" onClick={() => {
+                    if (window.confirm("Delete this mission?")) deleteMission(mission.id);
+                  }}>
+                    <Trash2 size={16} />
+                  </Button>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+// --- Auth Component ---
+
+function Auth({ onAuthSuccess, onCancel }: { onAuthSuccess: (user: User, token: string) => void; onCancel: () => void }) {
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+
+    if (mode === "signup" && password !== confirmPassword) {
+      setError("Passwords do not match");
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/signup";
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        onAuthSuccess(data.user, data.token);
+      } else {
+        setError(data.error || "Authentication failed");
+      }
+    } catch (err) {
+      setError("Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Card className="p-8 space-y-6">
+      <div className="space-y-2">
+        <h2 className="text-3xl font-black tracking-tighter uppercase">
+          {mode === "login" ? "Welcome Back" : "Create Account"}
+        </h2>
+        <p className="text-zinc-500 font-medium">
+          {mode === "login" ? "Login to manage your activities" : "Join us to start creating polls and missions"}
+        </p>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1">
+          <label className="text-xs font-bold uppercase tracking-widest text-zinc-400">Email Address</label>
+          <Input 
+            type="email" 
+            placeholder="you@example.com" 
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-bold uppercase tracking-widest text-zinc-400">Password</label>
+          <Input 
+            type="password" 
+            placeholder="••••••••" 
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </div>
+
+        {mode === "signup" && (
+          <div className="space-y-1">
+            <label className="text-xs font-bold uppercase tracking-widest text-zinc-400">Confirm Password</label>
+            <Input 
+              type="password" 
+              placeholder="••••••••" 
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+            />
+          </div>
+        )}
+
+        {error && (
+          <div className="p-3 bg-red-50 text-red-600 text-sm font-bold rounded-lg border border-red-100">
+            {error}
+          </div>
+        )}
+
+        <div className="pt-2 space-y-3">
+          <Button type="submit" className="w-full py-4 text-lg" disabled={loading}>
+            {loading ? "Processing..." : (mode === "login" ? "Login" : "Sign Up")}
+          </Button>
+          <Button type="button" variant="ghost" className="w-full" onClick={onCancel}>
+            Cancel
+          </Button>
+        </div>
+      </form>
+
+      <div className="pt-4 text-center">
+        <button 
+          onClick={() => setMode(mode === "login" ? "signup" : "login")}
+          className="text-sm font-bold text-zinc-500 hover:text-black transition-colors"
+        >
+          {mode === "login" ? "Don't have an account? Sign Up" : "Already have an account? Login"}
+        </button>
+      </div>
+    </Card>
+  );
+}
 
 // --- Main App ---
 
@@ -75,6 +319,8 @@ export default function App() {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordError, setPasswordError] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(localStorage.getItem("vote_token"));
   const [userId] = useState(() => {
     const saved = localStorage.getItem("vote_user_id");
     if (saved) return saved;
@@ -82,6 +328,44 @@ export default function App() {
     localStorage.setItem("vote_user_id", id);
     return id;
   });
+  const [viewingMedia, setViewingMedia] = useState<MediaItem | null>(null);
+
+  // Check/Register user and role
+  useEffect(() => {
+    if (token) {
+      fetch("/api/auth/me", {
+        headers: { "Authorization": `Bearer ${token}` }
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.error) {
+            setToken(null);
+            localStorage.removeItem("vote_token");
+          } else {
+            setUser(data);
+          }
+        })
+        .catch(err => {
+          console.error("Error checking user role:", err);
+          setToken(null);
+          localStorage.removeItem("vote_token");
+        });
+    }
+  }, [token]);
+
+  const handleAuthSuccess = (userData: User, userToken: string) => {
+    setUser(userData);
+    setToken(userToken);
+    localStorage.setItem("vote_token", userToken);
+    setView("home");
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    setToken(null);
+    localStorage.removeItem("vote_token");
+    setView("home");
+  };
 
   // Fetch active polls for home screen
   useEffect(() => {
@@ -368,55 +652,75 @@ export default function App() {
     <div className="min-h-screen bg-zinc-50 text-zinc-900 font-sans selection:bg-black selection:text-white">
       {/* Header */}
       <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-zinc-200">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-8">
-            <div 
-              className="flex items-center gap-2 cursor-pointer group"
-              onClick={() => setView("home")}
-            >
-              <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center text-white group-hover:scale-105 transition-transform">
-                <Vote size={18} />
-              </div>
-              <h1 className="font-bold text-lg tracking-tight">LiveVote</h1>
-            </div>
-
-            <nav className="hidden md:flex items-center bg-zinc-100 p-1 rounded-xl">
+        <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
+          <div className="flex items-center">
+            <nav className="flex items-center bg-zinc-100 p-1 rounded-xl">
               <button 
                 onClick={() => { setTopTab("vote"); setView("home"); }}
                 className={cn(
-                  "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
+                  "px-3 sm:px-4 py-1 rounded-lg text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 sm:gap-2",
                   topTab === "vote" ? "bg-white shadow-sm text-black" : "text-zinc-500 hover:text-zinc-700"
                 )}
               >
-                <Vote size={16} />
+                <Vote size={14} />
                 Live Vote
               </button>
               <button 
                 onClick={() => { setTopTab("mission"); setView("home"); }}
                 className={cn(
-                  "px-4 py-1.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
+                  "px-3 sm:px-4 py-1 rounded-lg text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 sm:gap-2",
                   topTab === "mission" ? "bg-white shadow-sm text-black" : "text-zinc-500 hover:text-zinc-700"
                 )}
               >
-                <Target size={16} />
+                <Target size={14} />
                 Team Mission
               </button>
             </nav>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            {user?.role === "admin" && (
+              <Button 
+                variant="ghost" 
+                size="sm"
+                onClick={() => setView("admin")}
+                className={cn("px-2 sm:px-3", view === "admin" && "bg-zinc-100")}
+              >
+                <Shield size={18} />
+                <span className="hidden md:inline ml-2">Admin</span>
+              </Button>
+            )}
+            {user ? (
+              <Button variant="ghost" onClick={handleLogout} size="sm" className="px-2 sm:px-3">
+                <LogOut size={18} />
+                <span className="hidden md:inline ml-2">Logout</span>
+              </Button>
+            ) : (
+              <Button variant="ghost" onClick={() => setView("auth")} size="sm" className="px-2 sm:px-3">
+                <Users size={18} />
+                <span className="hidden md:inline ml-2">Login</span>
+              </Button>
+            )}
             {view !== "home" && (
-              <Button variant="ghost" onClick={() => setView("home")}>
-                Home
+              <Button variant="ghost" onClick={() => setView("home")} size="sm" className="px-2 sm:px-3">
+                <Home size={18} />
+                <span className="hidden md:inline ml-2">Home</span>
               </Button>
             )}
             <Button 
               variant="primary" 
-              className="rounded-full px-6"
-              onClick={() => setView("create")}
+              size="sm"
+              className="rounded-full px-3 sm:px-5 h-9"
+              onClick={() => {
+                if (!user) {
+                  setView("auth");
+                } else {
+                  setView("create");
+                }
+              }}
             >
               <Plus size={18} />
-              <span className="hidden sm:inline">Create {topTab === "vote" ? "Poll" : "Mission"}</span>
+              <span className="hidden sm:inline ml-1.5">Create</span>
             </Button>
           </div>
         </div>
@@ -424,6 +728,29 @@ export default function App() {
 
       <main className="max-w-4xl mx-auto px-4 py-8 md:py-16">
         <AnimatePresence mode="wait">
+          {view === "auth" && (
+            <motion.div
+              key="auth"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="max-w-md mx-auto"
+            >
+              <Auth onAuthSuccess={handleAuthSuccess} onCancel={() => setView("home")} />
+            </motion.div>
+          )}
+
+          {view === "admin" && user?.role === "admin" && token && (
+            <motion.div
+              key="admin"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+            >
+              <AdminDashboard token={token} onNavigate={(v, id) => navigateTo(v, id)} />
+            </motion.div>
+          )}
+
           {view === "home" && (
             <motion.div
               key="home"
@@ -444,7 +771,13 @@ export default function App() {
                 <div className="flex flex-col sm:flex-row items-center gap-4 pt-8">
                   <Button 
                     className="w-full sm:w-auto px-8 py-4 text-lg rounded-2xl" 
-                    onClick={() => setView("create")}
+                    onClick={() => {
+                      if (!user) {
+                        setView("auth");
+                      } else {
+                        setView("create");
+                      }
+                    }}
                   >
                     Create a {topTab === "vote" ? "Poll" : "Mission"}
                   </Button>
@@ -543,7 +876,13 @@ export default function App() {
 
                 <Card 
                   className="border-dashed border-2 border-zinc-200 bg-transparent hover:border-black hover:bg-zinc-50 transition-all cursor-pointer flex flex-col items-center justify-center gap-4 aspect-square"
-                  onClick={() => setView("create")}
+                  onClick={() => {
+                    if (!user) {
+                      setView("auth");
+                    } else {
+                      setView("create");
+                    }
+                  }}
                 >
                   <div className="w-12 h-12 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-400">
                     <Plus size={24} />
@@ -591,6 +930,7 @@ export default function App() {
                 poll={pollData} 
                 onVote={handleVote} 
                 onViewResults={() => navigateTo("results", currentPollId!)}
+                onViewMedia={(item) => setViewingMedia(item)}
               />
             </motion.div>
           )}
@@ -609,6 +949,7 @@ export default function App() {
                   results={results} 
                   onVoteAgain={() => navigateTo("vote", currentPollId!)}
                   onUpdateStatus={handleUpdateStatus}
+                  onViewMedia={(item) => setViewingMedia(item)}
                 />
               ) : topTab === "mission" && missionData ? (
                 <MissionBoard
@@ -616,6 +957,7 @@ export default function App() {
                   onUpdateStatus={(status) => handleUpdateStatus(missionData.id, status)}
                   onAssignCard={handleAssignCard}
                   onSubmitResult={handleSubmitMissionResult}
+                  onViewMedia={(item) => setViewingMedia(item)}
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center py-20 gap-4">
@@ -637,11 +979,14 @@ export default function App() {
               <TeamRegistrationView 
                 poll={pollData}
                 onRegister={handleRegisterTeam}
+                onViewMedia={(item) => setViewingMedia(item)}
               />
             </motion.div>
           )}
         </AnimatePresence>
       </main>
+
+      <MediaViewer item={viewingMedia} onClose={() => setViewingMedia(null)} />
 
       {/* Footer */}
       <footer className="py-12 border-t border-zinc-200 mt-auto">
@@ -980,26 +1325,82 @@ function CreatePollForm({ onSubmit, onCancel }: { onSubmit: (config: any) => voi
   );
 }
 
-function MediaGallery({ media }: { media: MediaItem[] }) {
+function MediaGallery({ media, onViewMedia }: { media: MediaItem[]; onViewMedia: (item: MediaItem) => void }) {
   if (media.length === 0) return null;
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
       {media.map((item, index) => (
         <div key={index} className="group relative bg-zinc-100 rounded-xl overflow-hidden border border-zinc-200">
-          {item.type === "image" && (
-            <img src={item.url} alt={item.title} className="w-full h-48 object-cover" referrerPolicy="no-referrer" />
-          )}
-          {item.type === "video" && (
+          {item.type === "image" ? (
+            <>
+              <img src={item.url} alt={item.title} className="w-full h-48 object-cover" referrerPolicy="no-referrer" />
+              <div 
+                className="absolute inset-0 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/20 cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onViewMedia(item);
+                }}
+              >
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="text-white bg-white/10 backdrop-blur-sm rounded-full w-10 h-10 p-0 hover:bg-white/20"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onViewMedia(item);
+                  }}
+                >
+                  <Maximize2 size={18} />
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="text-white bg-white/10 backdrop-blur-sm rounded-full w-10 h-10 p-0 hover:bg-white/20"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openMediaInNewTab(item.url);
+                  }}
+                >
+                  <ExternalLink size={18} />
+                </Button>
+              </div>
+            </>
+          ) : item.type === "video" ? (
             <div className="w-full h-48 bg-black flex items-center justify-center">
               <Video className="text-white/50" size={48} />
-              <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                <a href={item.url} target="_blank" rel="noopener noreferrer" className="p-3 bg-white/20 backdrop-blur-md rounded-full text-white">
+              <div 
+                className="absolute inset-0 flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onViewMedia(item);
+                }}
+              >
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="text-white bg-white/10 backdrop-blur-sm rounded-full w-10 h-10 p-0 hover:bg-white/20"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onViewMedia(item);
+                  }}
+                >
+                  <Maximize2 size={18} />
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="text-white bg-white/10 backdrop-blur-sm rounded-full w-10 h-10 p-0 hover:bg-white/20"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openMediaInNewTab(item.url);
+                  }}
+                >
                   <Play fill="currentColor" size={24} />
-                </a>
+                </Button>
               </div>
             </div>
-          )}
+          ) : null}
           {item.type === "audio" && (
             <div className="w-full h-48 flex flex-col items-center justify-center gap-2">
               <Music className="text-zinc-400" size={48} />
@@ -1028,7 +1429,7 @@ function MediaGallery({ media }: { media: MediaItem[] }) {
   );
 }
 
-function TeamRegistrationView({ poll, onRegister }: { poll: Poll; onRegister: (teamName: string, media: MediaItem[]) => void }) {
+function TeamRegistrationView({ poll, onRegister, onViewMedia }: { poll: Poll; onRegister: (teamName: string, media: MediaItem[]) => void; onViewMedia: (item: MediaItem) => void }) {
   const [teamName, setTeamName] = useState("");
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [newUrl, setNewUrl] = useState("");
@@ -1116,12 +1517,32 @@ function TeamRegistrationView({ poll, onRegister }: { poll: Poll; onRegister: (t
                     <Video size={24} />
                   </div>
                 )}
-                <button 
-                  onClick={() => removeMedia(i)}
-                  className="absolute top-1 right-1 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                <div 
+                  className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1 cursor-pointer"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onViewMedia(item);
+                  }}
                 >
-                  <Trash2 size={12} />
-                </button>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onViewMedia(item);
+                    }}
+                    className="w-8 h-8 bg-white/20 backdrop-blur-md text-white rounded-full flex items-center justify-center hover:bg-white/40 transition-colors"
+                  >
+                    <Maximize2 size={14} />
+                  </button>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeMedia(i);
+                    }}
+                    className="w-8 h-8 bg-red-500 text-white rounded-full flex items-center justify-center hover:bg-red-600 transition-colors"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
             ))}
             
@@ -1265,7 +1686,7 @@ function JoinCodeGate({ poll, onJoin, mode = "vote" }: { poll: Poll; onJoin: () 
   );
 }
 
-function VoteInterface({ poll, onVote, onViewResults }: { poll: Poll; onVote: (responses: { questionId: string; teamId?: string; optionIndex: number }[]) => void; onViewResults: () => void }) {
+function VoteInterface({ poll, onVote, onViewResults, onViewMedia }: { poll: Poll; onVote: (responses: { questionId: string; teamId?: string; optionIndex: number }[]) => void; onViewResults: () => void; onViewMedia: (item: MediaItem) => void }) {
   const [selections, setSelections] = useState<Record<string, number>>({});
   const [isJoined, setIsJoined] = useState(false);
   const hasVoted = localStorage.getItem(`voted_${poll.id}`) === "true";
@@ -1398,7 +1819,7 @@ function VoteInterface({ poll, onVote, onViewResults }: { poll: Poll; onVote: (r
                           {isSelected ? "Selected" : "Select Team"}
                         </button>
                       </div>
-                      <MediaGallery media={team.media} />
+                      <MediaGallery media={team.media} onViewMedia={onViewMedia} />
                     </div>
                   );
                 })}
@@ -1416,7 +1837,7 @@ function VoteInterface({ poll, onVote, onViewResults }: { poll: Poll; onVote: (r
                 <h3 className="text-2xl font-bold">{team.name}</h3>
               </div>
 
-              <MediaGallery media={team.media} />
+              <MediaGallery media={team.media} onViewMedia={onViewMedia} />
 
               <div className="space-y-10 pt-4">
                 {poll.questions.map((q, qIndex) => (
@@ -1509,7 +1930,7 @@ function VoteInterface({ poll, onVote, onViewResults }: { poll: Poll; onVote: (r
   );
 }
 
-function ResultsDashboard({ poll, results, onVoteAgain, onUpdateStatus }: { poll: Poll; results: VoteResult[]; onVoteAgain: () => void; onUpdateStatus: (id: string, status: Poll["status"]) => void }) {
+function ResultsDashboard({ poll, results, onVoteAgain, onUpdateStatus, onViewMedia }: { poll: Poll; results: VoteResult[]; onVoteAgain: () => void; onUpdateStatus: (id: string, status: Poll["status"]) => void; onViewMedia: (item: MediaItem) => void }) {
   const [copied, setCopied] = useState(false);
   const [copiedTeamId, setCopiedTeamId] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState<string>("");
@@ -1728,7 +2149,7 @@ function ResultsDashboard({ poll, results, onVoteAgain, onUpdateStatus }: { poll
                 {poll.teams.map(team => (
                   <div key={team.id} className="space-y-4">
                     <h4 className="font-bold text-zinc-400 uppercase tracking-widest text-[10px]">{team.name} Materials</h4>
-                    <MediaGallery media={team.media} />
+                    <MediaGallery media={team.media} onViewMedia={onViewMedia} />
                   </div>
                 ))}
               </div>
