@@ -50,7 +50,31 @@ import {
   PieChart,
   Pie
 } from "recharts";
-import socket from "./socket";
+import { auth } from "./firebase";
+import { 
+  onAuthStateChanged, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signOut 
+} from "firebase/auth";
+import { 
+  subscribeToPolls, 
+  subscribeToMissions, 
+  subscribeToPoll, 
+  subscribeToMission, 
+  subscribeToVotes,
+  getPoll,
+  getMission,
+  castVote,
+  updatePoll,
+  updateMission,
+  createPoll,
+  createMission,
+  getUserProfile,
+  createUserProfile,
+  deletePoll as apiDeletePoll,
+  deleteMission as apiDeleteMission
+} from "./services/firebaseService";
 import { cn } from "./lib/utils";
 import { openMediaInNewTab } from "./lib/mediaUtils";
 import { Poll, VoteResult, AppView, MediaItem, Team, MissionActivity, MissionCard, User } from "./types";
@@ -75,12 +99,18 @@ function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (vie
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [pollsRes, missionsRes] = await Promise.all([
-        fetch("/api/admin/polls", { headers: { "Authorization": `Bearer ${token}` } }),
-        fetch("/api/admin/missions", { headers: { "Authorization": `Bearer ${token}` } })
-      ]);
-      const pollsData = await pollsRes.json();
-      const missionsData = await missionsRes.json();
+      const pollsData = await new Promise<any[]>((resolve) => {
+        const unsubscribe = subscribeToPolls((data) => {
+          unsubscribe();
+          resolve(data);
+        });
+      });
+      const missionsData = await new Promise<any[]>((resolve) => {
+        const unsubscribe = subscribeToMissions((data) => {
+          unsubscribe();
+          resolve(data);
+        });
+      });
       setPolls(pollsData);
       setMissions(missionsData);
     } catch (err) {
@@ -95,18 +125,12 @@ function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (vie
   }, []);
 
   const deletePoll = async (id: string) => {
-    await fetch(`/api/admin/polls/${id}`, { 
-      method: "DELETE",
-      headers: { "Authorization": `Bearer ${token}` }
-    });
+    await apiDeletePoll(id);
     fetchData();
   };
 
   const deleteMission = async (id: string) => {
-    await fetch(`/api/admin/missions/${id}`, { 
-      method: "DELETE",
-      headers: { "Authorization": `Bearer ${token}` }
-    });
+    await apiDeleteMission(id);
     fetchData();
   };
 
@@ -133,7 +157,13 @@ function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (vie
               <Card key={poll.id} className="p-4 flex items-center justify-between">
                 <div>
                   <div className="font-bold">{poll.title}</div>
-                  <div className="text-xs text-zinc-400">ID: {poll.id} • Status: {poll.status} • Created: {new Date(poll.createdAt).toLocaleDateString()}</div>
+                  <div className="text-xs text-zinc-400 flex flex-wrap items-center gap-2">
+                    <span>ID: {poll.id} • Status: {poll.status} • Created: {new Date(poll.createdAt).toLocaleDateString()}</span>
+                    <span className="px-1.5 py-0.5 bg-zinc-100 text-zinc-600 rounded font-bold">{poll.teamCount || 0} Teams</span>
+                    <span className="px-1.5 py-0.5 bg-zinc-100 text-zinc-600 rounded font-bold">{poll.voteCount || 0} Voters</span>
+                    {poll.joinCode && <span className="px-1.5 py-0.5 bg-zinc-100 text-zinc-600 rounded font-mono font-bold">JOIN: {poll.joinCode}</span>}
+                    {poll.registrationCode && <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded font-mono font-bold">REG: {poll.registrationCode}</span>}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button variant="ghost" size="sm" onClick={() => onNavigate("results", poll.id)}>View</Button>
@@ -158,7 +188,10 @@ function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (vie
               <Card key={mission.id} className="p-4 flex items-center justify-between">
                 <div>
                   <div className="font-bold">{mission.title}</div>
-                  <div className="text-xs text-zinc-400">ID: {mission.id} • Status: {mission.status} • Teams: {mission.teamCount}</div>
+                  <div className="text-xs text-zinc-400 flex flex-wrap items-center gap-2">
+                    <span>ID: {mission.id} • Status: {mission.status} • Teams: {mission.teamCount}</span>
+                    {mission.joinCode && <span className="px-1.5 py-0.5 bg-zinc-100 text-zinc-600 rounded font-mono font-bold">JOIN: {mission.joinCode}</span>}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button variant="ghost" size="sm" onClick={() => {
@@ -208,21 +241,26 @@ function Auth({ onAuthSuccess, onCancel }: { onAuthSuccess: (user: User, token: 
     setLoading(true);
 
     try {
-      const endpoint = mode === "login" ? "/api/auth/login" : "/api/auth/signup";
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password })
-      });
-      const data = await res.json();
-
-      if (res.ok) {
-        onAuthSuccess(data.user, data.token);
+      if (mode === "login") {
+        const userCredential = await signInWithEmailAndPassword(auth, email, password);
+        const profile = await getUserProfile(userCredential.user.uid);
+        if (profile) {
+          onAuthSuccess(profile, await userCredential.user.getIdToken());
+        }
       } else {
-        setError(data.error || "Authentication failed");
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const role = email === "btobkorea@gmail.com" ? "admin" : "user";
+        const newUser: User = {
+          id: userCredential.user.uid,
+          email: email,
+          role: role
+        };
+        await createUserProfile(newUser);
+        onAuthSuccess(newUser, await userCredential.user.getIdToken());
       }
-    } catch (err) {
-      setError("Something went wrong. Please try again.");
+    } catch (err: any) {
+      console.error("Auth error:", err);
+      setError(err.message || "Authentication failed");
     } finally {
       setLoading(false);
     }
@@ -316,6 +354,8 @@ export default function App() {
   const [activePolls, setActivePolls] = useState<any[]>([]);
   const [activeMissions, setActiveMissions] = useState<any[]>([]);
   const [pendingMissionId, setPendingMissionId] = useState<string | null>(null);
+  const [pendingPollId, setPendingPollId] = useState<string | null>(null);
+  const [pendingPollView, setPendingPollView] = useState<AppView | null>(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordError, setPasswordError] = useState(false);
@@ -329,41 +369,36 @@ export default function App() {
     return id;
   });
   const [viewingMedia, setViewingMedia] = useState<MediaItem | null>(null);
+  const [showJoinCodeModal, setShowJoinCodeModal] = useState(false);
+  const [joinCodeInfo, setJoinCodeInfo] = useState<{ title: string; joinCode?: string; registrationCode?: string } | null>(null);
 
   // Check/Register user and role
   useEffect(() => {
-    if (token) {
-      fetch("/api/auth/me", {
-        headers: { "Authorization": `Bearer ${token}` }
-      })
-        .then(res => res.json())
-        .then(data => {
-          if (data.error) {
-            setToken(null);
-            localStorage.removeItem("vote_token");
-          } else {
-            setUser(data);
-          }
-        })
-        .catch(err => {
-          console.error("Error checking user role:", err);
-          setToken(null);
-          localStorage.removeItem("vote_token");
-        });
-    }
-  }, [token]);
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        const profile = await getUserProfile(firebaseUser.uid);
+        if (profile) {
+          setUser(profile);
+          setToken(await firebaseUser.getIdToken());
+        }
+      } else {
+        setUser(null);
+        setToken(null);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   const handleAuthSuccess = (userData: User, userToken: string) => {
     setUser(userData);
     setToken(userToken);
-    localStorage.setItem("vote_token", userToken);
     setView("home");
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await signOut(auth);
     setUser(null);
     setToken(null);
-    localStorage.removeItem("vote_token");
     setView("home");
   };
 
@@ -371,36 +406,27 @@ export default function App() {
   useEffect(() => {
     if (view === "home") {
       if (topTab === "vote") {
-        fetch("/api/polls")
-          .then(res => res.json())
-          .then(data => setActivePolls(data))
-          .catch(err => console.error("Error fetching active polls:", err));
+        return subscribeToPolls(setActivePolls);
       } else {
-        fetch("/api/missions")
-          .then(res => res.json())
-          .then(data => setActiveMissions(data))
-          .catch(err => console.error("Error fetching active missions:", err));
+        return subscribeToMissions(setActiveMissions);
       }
     }
   }, [view, topTab]);
 
   // Handle socket events for missions
   useEffect(() => {
-    socket.on("mission-updated", (data) => {
-      setMissionData(prev => {
-        if (!prev) return null;
-        return { ...prev, ...data };
+    let unsubscribe: (() => void) | undefined;
+    
+    if (currentMissionId) {
+      unsubscribe = subscribeToMission(currentMissionId, (data) => {
+        if (data) setMissionData(data);
       });
-    });
-
-    socket.on("mission-error", (data: { message: string }) => {
-      alert(data.message);
-    });
+    }
 
     return () => {
-      socket.off("mission-updated");
+      if (unsubscribe) unsubscribe();
     };
-  }, []);
+  }, [currentMissionId]);
 
   const navigateToMission = (missionId: string) => {
     const mission = activeMissions.find(m => m.id === missionId);
@@ -424,20 +450,24 @@ export default function App() {
     url.searchParams.delete("mode");
     window.history.pushState({}, "", url);
 
-    socket.emit("join-mission", missionId);
-    fetch(`/api/missions/${missionId}`)
-      .then(res => res.json())
-      .then(data => setMissionData(data))
-      .catch(err => console.error("Error fetching mission:", err));
+    getMission(missionId).then(data => {
+      if (!data) {
+        setMissionData(null);
+        setView("home");
+        return;
+      }
+      setMissionData(data);
+    }).catch(err => {
+      console.error("Error fetching mission:", err);
+      setMissionData(null);
+      setView("home");
+    });
   };
 
   const handlePasswordSubmit = () => {
-    if (!pendingMissionId) return;
-    
-    fetch(`/api/missions/${pendingMissionId}`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.joinCode === passwordInput) {
+    if (pendingMissionId) {
+      getMission(pendingMissionId).then(data => {
+        if (data && data.joinCode === passwordInput) {
           setTopTab("mission");
           setCurrentMissionId(pendingMissionId);
           setMissionData(null); // Reset to show loading spinner
@@ -451,14 +481,54 @@ export default function App() {
           url.searchParams.delete("mode");
           window.history.pushState({}, "", url);
 
-          socket.emit("join-mission", pendingMissionId);
           setShowPasswordModal(false);
           setPendingMissionId(null);
         } else {
           setPasswordError(true);
         }
-      })
-      .catch(err => console.error("Error verifying password:", err));
+      }).catch(err => console.error("Error verifying password:", err));
+    } else if (pendingPollId && pendingPollView) {
+      getPoll(pendingPollId).then(data => {
+        if (data && data.joinCode === passwordInput) {
+          setTopTab("vote");
+          setCurrentPollId(pendingPollId);
+          setPollData(null);
+          
+          const url = new URL(window.location.href);
+          url.searchParams.set("poll", pendingPollId);
+          if (pendingPollView === "results") {
+            url.searchParams.set("mode", "results");
+          } else if (pendingPollView === "team-upload") {
+            url.searchParams.set("mode", "team-upload");
+          }
+          window.history.pushState({}, "", url);
+
+          setView(pendingPollView);
+          setPollData(data);
+          setShowPasswordModal(false);
+          setPendingPollId(null);
+          setPendingPollView(null);
+        } else {
+          setPasswordError(true);
+        }
+      }).catch(err => console.error("Error verifying password:", err));
+    }
+  };
+
+  const handleShowCodes = async (type: "poll" | "mission", id: string, title: string) => {
+    try {
+      const data = type === "poll" ? await getPoll(id) : await getMission(id);
+      if (data) {
+        setJoinCodeInfo({
+          title,
+          joinCode: data.joinCode,
+          registrationCode: (data as any).registrationCode
+        });
+        setShowJoinCodeModal(true);
+      }
+    } catch (err) {
+      console.error("Error fetching codes:", err);
+    }
   };
 
   const handleCreateMission = (config: { title: string; teamCount: number; joinCode?: string }) => {
@@ -481,18 +551,32 @@ export default function App() {
       createdAt: Date.now()
     };
 
-    socket.emit("create-mission", newMission);
-    navigateToMission(id);
+    createMission(newMission)
+    .then(() => {
+      navigateToMission(id);
+    })
+    .catch(err => console.error("Error creating mission:", err));
   };
 
-  const handleAssignCard = (cardId: string, teamName: string, password?: string) => {
-    if (!currentMissionId) return;
-    socket.emit("assign-mission-card", { missionId: currentMissionId, cardId, teamName, password });
+  const handleAssignCard = async (cardId: string, teamName: string, password?: string) => {
+    if (!currentMissionId || !missionData) return;
+    const updatedCards = missionData.cards.map(c => 
+      c.id === cardId ? { ...c, teamName, password, status: "assigned" as const } : c
+    );
+    await updateMission(currentMissionId, { cards: updatedCards });
   };
 
-  const handleSubmitMissionResult = (cardId: string, result: string, password?: string, media?: MediaItem[]) => {
-    if (!currentMissionId) return;
-    socket.emit("submit-mission-result", { missionId: currentMissionId, cardId, result, password, media });
+  const handleSubmitMissionResult = async (cardId: string, result: string, password?: string, media?: MediaItem[]) => {
+    if (!currentMissionId || !missionData) return;
+    const card = missionData.cards.find(c => c.id === cardId);
+    if (card?.password && card.password !== password) {
+      alert("Invalid card password");
+      return;
+    }
+    const updatedCards = missionData.cards.map(c => 
+      c.id === cardId ? { ...c, result, media, status: "completed" as const } : c
+    );
+    await updateMission(currentMissionId, { cards: updatedCards });
   };
 
   // Check URL for direct poll or mission access
@@ -516,9 +600,7 @@ export default function App() {
       setTopTab("mission");
       setCurrentMissionId(missionId);
       setView("results");
-      socket.emit("join-mission", missionId);
-      fetch(`/api/missions/${missionId}`)
-        .then(res => res.json())
+      getMission(missionId)
         .then(data => setMissionData(data))
         .catch(err => console.error("Error fetching mission:", err));
     }
@@ -526,34 +608,35 @@ export default function App() {
 
   // Socket listeners
   useEffect(() => {
-    socket.on("results-update", (updatedResults: VoteResult[]) => {
-      setResults(updatedResults);
-    });
+    let unsubscribePoll: (() => void) | undefined;
+    let unsubscribeVotes: (() => void) | undefined;
 
-    socket.on("poll-updated", (update: Partial<Poll>) => {
-      setPollData(prev => prev ? { ...prev, ...update } : null);
-    });
+    if (currentPollId) {
+      unsubscribePoll = subscribeToPoll(currentPollId, (data) => {
+        setPollData(data);
+      });
+      unsubscribeVotes = subscribeToVotes(currentPollId, (updatedResults) => {
+        setResults(updatedResults);
+      });
+    }
 
     return () => {
-      socket.off("results-update");
-      socket.off("poll-updated");
+      if (unsubscribePoll) unsubscribePoll();
+      if (unsubscribeVotes) unsubscribeVotes();
     };
-  }, []);
+  }, [currentPollId]);
 
   // Fetch poll data when currentPollId changes
   useEffect(() => {
     if (currentPollId) {
-      fetch(`/api/polls/${currentPollId}`)
-        .then(res => res.json())
+      getPoll(currentPollId)
         .then(data => {
-          if (data.error) {
+          if (!data) {
             alert("Poll not found");
             setView("home");
             return;
           }
           setPollData(data);
-          setResults(data.results || []);
-          socket.emit("join-poll", currentPollId);
         })
         .catch(err => console.error("Error fetching poll:", err));
     }
@@ -562,6 +645,16 @@ export default function App() {
   const navigateTo = (newView: AppView, pollId?: string) => {
     const url = new URL(window.location.href);
     if (pollId) {
+      const poll = activePolls.find(p => p.id === pollId);
+      if (poll?.hasPassword) {
+        setPendingPollId(pollId);
+        setPendingPollView(newView);
+        setShowPasswordModal(true);
+        setPasswordInput("");
+        setPasswordError(false);
+        return;
+      }
+
       url.searchParams.set("poll", pollId);
       setCurrentPollId(pollId);
       
@@ -591,7 +684,7 @@ export default function App() {
 
   const handleCreatePoll = (config: any) => {
     const id = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const joinCode = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const joinCode = config.password || null;
     const registrationCode = Math.random().toString(36).substring(2, 6).toUpperCase();
     
     const newPoll: Poll = {
@@ -610,40 +703,36 @@ export default function App() {
       deadline: config.deadline ? Date.now() + config.deadline * 60000 : undefined,
       createdAt: Date.now()
     };
-    socket.emit("create-poll", newPoll);
-    navigateTo("results", id);
+
+    createPoll(newPoll)
+    .then(() => {
+      navigateTo("results", id);
+    })
+    .catch(err => console.error("Error creating poll:", err));
   };
 
-  const handleRegisterTeam = (teamName: string, media: MediaItem[]) => {
-    if (!currentPollId) return;
-    socket.emit("register-team", {
-      pollId: currentPollId,
-      teamName,
+  const handleRegisterTeam = async (teamName: string, media: MediaItem[]) => {
+    if (!currentPollId || !pollData) return;
+    const newTeam: Team = {
+      id: Math.random().toString(36).substring(2, 8).toUpperCase(),
+      name: teamName,
       media
-    });
+    };
+    const updatedTeams = [...pollData.teams, newTeam];
+    await updatePoll(currentPollId, { teams: updatedTeams });
   };
 
-  const handleUpdateStatus = (id: string, status: Poll["status"] | MissionActivity["status"]) => {
+  const handleUpdateStatus = async (id: string, status: Poll["status"] | MissionActivity["status"]) => {
     if (topTab === "vote") {
-      socket.emit("update-poll-status", {
-        pollId: id,
-        status: status as Poll["status"]
-      });
+      await updatePoll(id, { status: status as Poll["status"] });
     } else {
-      socket.emit("update-mission-status", {
-        missionId: id,
-        status: status as MissionActivity["status"]
-      });
+      await updateMission(id, { status: status as MissionActivity["status"] });
     }
   };
 
-  const handleVote = (responses: { questionId: string; teamId?: string; optionIndex: number }[]) => {
-    if (!currentPollId) return;
-    socket.emit("vote", {
-      pollId: currentPollId,
-      responses,
-      userId
-    });
+  const handleVote = async (responses: { questionId: string; teamId?: string; optionIndex: number }[]) => {
+    if (!currentPollId || !user) return;
+    await castVote(currentPollId, user.id, responses);
     localStorage.setItem(`voted_${currentPollId}`, "true");
     navigateTo("results", currentPollId);
   };
@@ -801,23 +890,56 @@ export default function App() {
                     >
                       <div className="space-y-4">
                         <div className="flex justify-between items-start">
-                          <div className={cn(
-                            "px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase",
-                            poll.type === "popularity" ? "bg-blue-100 text-blue-600" : "bg-zinc-100 text-zinc-600"
-                          )}>
-                            {poll.type}
+                          <div className="flex items-center gap-2">
+                            {poll.hasPassword && <Lock size={12} className="text-zinc-600" />}
+                            <div className={cn(
+                              "px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase",
+                              poll.status === "closed" ? "bg-zinc-200 text-zinc-600" : 
+                              poll.status === "voting" ? "bg-emerald-100 text-emerald-600" :
+                              "bg-blue-100 text-blue-600"
+                            )}>
+                              {poll.status === "setup" ? "Registration" : poll.status}
+                            </div>
                           </div>
                           <div className="text-xs font-bold text-zinc-300">#{poll.id}</div>
                         </div>
                         <h3 className="text-2xl font-bold leading-tight group-hover:underline decoration-2 underline-offset-4">
                           {poll.title}
                         </h3>
+                        <div className="flex flex-wrap gap-4">
+                          {poll.type === "popularity" && (
+                            <div className="flex items-center gap-1.5 text-zinc-400">
+                              <Users size={14} />
+                              <span className="text-[10px] font-bold uppercase tracking-widest">{poll.teamCount || 0} Registered</span>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-1.5 text-zinc-400">
+                            <Vote size={14} />
+                            <span className="text-[10px] font-bold uppercase tracking-widest">{poll.voteCount || 0} Voted</span>
+                          </div>
+                        </div>
+                        {user?.role === "admin" && (
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-7 px-2 text-[10px] font-bold uppercase tracking-widest bg-zinc-100 hover:bg-zinc-200"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleShowCodes("poll", poll.id, poll.title);
+                            }}
+                          >
+                            <Shield size={12} className="mr-1" />
+                            Show Codes
+                          </Button>
+                        )}
                       </div>
                       
                       <div className="flex items-center justify-between pt-6 border-t border-zinc-100">
                         <div className="flex items-center gap-2 text-zinc-400">
                           <BarChart3 size={16} />
-                          <span className="text-xs font-bold uppercase tracking-widest">View Results</span>
+                          <span className="text-xs font-bold uppercase tracking-widest">
+                            {poll.status === "setup" ? "Register Team" : "View Results"}
+                          </span>
                         </div>
                         <div className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center group-hover:bg-black group-hover:text-white transition-all">
                           <ChevronRight size={20} />
@@ -840,7 +962,7 @@ export default function App() {
                               "px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase",
                               mission.status === "closed" ? "bg-zinc-200 text-zinc-600" : "bg-emerald-100 text-emerald-600"
                             )}>
-                              {mission.status === "closed" ? "Completed" : "Mission"}
+                              {mission.status === "closed" ? "Completed" : "Active"}
                             </div>
                           </div>
                           <div className="text-xs font-bold text-zinc-300">#{mission.id}</div>
@@ -848,9 +970,27 @@ export default function App() {
                         <h3 className="text-2xl font-bold leading-tight group-hover:underline decoration-2 underline-offset-4">
                           {mission.title}
                         </h3>
-                        <div className="flex items-center gap-2 text-zinc-400">
-                          <Users size={16} />
-                          <span className="text-xs font-bold uppercase tracking-widest">{mission.teamCount} Teams Participating</span>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-zinc-400">
+                            <Users size={16} />
+                            <span className="text-xs font-bold uppercase tracking-widest">
+                              {mission.joinedCount || 0} / {mission.teamCount} Teams Joined
+                            </span>
+                          </div>
+                          {user?.role === "admin" && (
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="h-7 px-2 text-[10px] font-bold uppercase tracking-widest bg-zinc-100 hover:bg-zinc-200"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleShowCodes("mission", mission.id, mission.title);
+                              }}
+                            >
+                              <Shield size={12} className="mr-1" />
+                              Codes
+                            </Button>
+                          )}
                         </div>
                       </div>
                       
@@ -951,7 +1091,7 @@ export default function App() {
                   onUpdateStatus={handleUpdateStatus}
                   onViewMedia={(item) => setViewingMedia(item)}
                 />
-              ) : topTab === "mission" && missionData ? (
+              ) : topTab === "mission" && missionData && !missionData.error ? (
                 <MissionBoard
                   mission={missionData}
                   onUpdateStatus={(status) => handleUpdateStatus(missionData.id, status)}
@@ -1002,6 +1142,72 @@ export default function App() {
       </footer>
 
       {/* Password Modal */}
+      <AnimatePresence>
+        {showJoinCodeModal && joinCodeInfo && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl space-y-6"
+            >
+              <div className="space-y-2 text-center">
+                <div className="w-16 h-16 bg-zinc-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <Shield className="text-black" size={32} />
+                </div>
+                <h3 className="text-2xl font-black tracking-tighter uppercase">{joinCodeInfo.title}</h3>
+                <p className="text-zinc-500 font-medium text-sm">Admin Access: Join Codes</p>
+              </div>
+
+              <div className="space-y-4">
+                {joinCodeInfo.joinCode && (
+                  <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 space-y-1">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Join Code (Password)</p>
+                    <div className="flex items-center justify-between">
+                      <p className="text-2xl font-mono font-bold tracking-wider">{joinCodeInfo.joinCode}</p>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={() => {
+                          navigator.clipboard.writeText(joinCodeInfo.joinCode!);
+                        }}
+                      >
+                        <Copy size={16} />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {joinCodeInfo.registrationCode && (
+                  <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100 space-y-1">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-blue-400">Registration Code</p>
+                    <div className="flex items-center justify-between">
+                      <p className="text-2xl font-mono font-bold tracking-wider text-blue-600">{joinCodeInfo.registrationCode}</p>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="text-blue-600"
+                        onClick={() => {
+                          navigator.clipboard.writeText(joinCodeInfo.registrationCode!);
+                        }}
+                      >
+                        <Copy size={16} />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {!joinCodeInfo.joinCode && !joinCodeInfo.registrationCode && (
+                  <p className="text-center text-zinc-500 py-4">No codes set for this activity.</p>
+                )}
+              </div>
+
+              <Button className="w-full py-4 rounded-2xl" onClick={() => setShowJoinCodeModal(false)}>
+                Close
+              </Button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {showPasswordModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -1081,7 +1287,7 @@ function JoinPollBox({ onJoin }: { onJoin: (id: string) => void }) {
     <div className="flex items-center bg-white border border-zinc-200 rounded-2xl p-1 pl-4 w-full sm:w-auto shadow-sm">
       <input 
         type="text" 
-        placeholder="Enter Code (e.g. AB12)" 
+        placeholder="Enter Poll ID (e.g. AB12)" 
         className="bg-transparent border-none focus:outline-none text-sm font-mono uppercase w-32"
         value={code}
         onChange={(e) => setCode(e.target.value.toUpperCase())}
@@ -1114,6 +1320,7 @@ function FeatureCard({ icon, title, description }: { icon: React.ReactNode; titl
 function CreatePollForm({ onSubmit, onCancel }: { onSubmit: (config: any) => void; onCancel: () => void }) {
   const [type, setType] = useState<"general" | "popularity">("general");
   const [title, setTitle] = useState("");
+  const [password, setPassword] = useState("");
   const [questions, setQuestions] = useState([{ text: "", options: ["", ""] }]);
   const [deadline, setDeadline] = useState("10"); // minutes
 
@@ -1166,6 +1373,7 @@ function CreatePollForm({ onSubmit, onCancel }: { onSubmit: (config: any) => voi
       onSubmit({
         type,
         title,
+        password: password.trim() || undefined,
         // For popularity, we only send the first question and clear its options
         questions: type === "popularity" 
           ? [{ ...questions[0], options: [] }] 
@@ -1219,12 +1427,21 @@ function CreatePollForm({ onSubmit, onCancel }: { onSubmit: (config: any) => voi
 
       <form onSubmit={handleSubmit} className="space-y-10">
         <div className="space-y-6">
-          <Input 
-            label="Evaluation Title" 
-            placeholder="e.g. Hackathon Final Presentations" 
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-          />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <Input 
+              label="Evaluation Title" 
+              placeholder="e.g. Hackathon Final Presentations" 
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+            <Input 
+              label="Access Password (Optional)" 
+              placeholder="Leave blank for public" 
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              type="password"
+            />
+          </div>
 
           {type === "popularity" && (
             <Input 
@@ -1468,7 +1685,7 @@ function TeamRegistrationView({ poll, onRegister, onViewMedia }: { poll: Poll; o
     setIsSubmitted(true);
   };
 
-  if (!isJoined) {
+  if (!isJoined && !isSubmitted && poll.registrationCode) {
     return <JoinCodeGate poll={poll} onJoin={() => setIsJoined(true)} mode="register" />;
   }
 
@@ -1654,11 +1871,11 @@ function JoinCodeGate({ poll, onJoin, mode = "vote" }: { poll: Poll; onJoin: () 
         <div className="w-16 h-16 bg-zinc-100 rounded-full flex items-center justify-center mx-auto text-zinc-400">
           {mode === "register" ? <Upload size={32} /> : <Zap size={32} />}
         </div>
-        <h2 className="text-2xl font-bold">{mode === "register" ? "Enter Registration Code" : "Enter Join Code"}</h2>
+        <h2 className="text-2xl font-bold">{mode === "register" ? "Enter Registration Code" : "Enter Access Password"}</h2>
         <p className="text-zinc-500 text-sm">
           {mode === "register" 
             ? "Please enter the 4-digit registration code to upload your team's results." 
-            : `Please enter the 4-digit code to join this ${poll.type === "popularity" ? "evaluation" : "poll"}.`}
+            : `Please enter the password to join this ${poll.type === "popularity" ? "evaluation" : "poll"}.`}
         </p>
       </div>
 
@@ -1733,7 +1950,7 @@ function VoteInterface({ poll, onVote, onViewResults, onViewMedia }: { poll: Pol
     onVote(responses);
   };
 
-  if (!isJoined && !hasVoted) {
+  if (!isJoined && !hasVoted && poll.joinCode) {
     return <JoinCodeGate poll={poll} onJoin={() => setIsJoined(true)} />;
   }
 
@@ -2089,14 +2306,14 @@ function ResultsDashboard({ poll, results, onVoteAgain, onUpdateStatus, onViewMe
                 type="text"
                 className="flex-1 px-4 py-2 rounded-xl border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-black/5"
                 value={poll.questions[0]?.text || ""}
-                onChange={(e) => {
+                onChange={async (e) => {
                   const newQuestions = [...poll.questions];
                   if (newQuestions[0]) {
                     newQuestions[0].text = e.target.value;
                   } else {
                     newQuestions[0] = { id: "q-popularity", text: e.target.value, options: [] };
                   }
-                  socket.emit("update-poll-questions", { pollId: poll.id, questions: newQuestions });
+                  await updatePoll(poll.id, { questions: newQuestions });
                 }}
                 placeholder="e.g. Who had the best presentation?"
               />

@@ -1,0 +1,146 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: polls
+// Document ID: pollId (string)
+// Fields:
+//   - id: string (required)
+//   - type: string (required, enum: general, mission)
+//   - title: string (required, size < 200)
+//   - questions: array (required, size < 50)
+//   - teams: array (required, size < 100)
+//   - status: string (required, enum: setup, active, closed)
+//   - joinCode: string (optional, size < 20)
+//   - registrationCode: string (optional, size < 20)
+//   - deadline: number (optional)
+//   - createdAt: number (required)
+//
+// Collection: polls/{pollId}/votes
+// Document ID: voteId (string)
+// Fields:
+//   - pollId: string (required)
+//   - questionId: string (required)
+//   - teamId: string (optional)
+//   - optionIndex: number (required)
+//   - userId: string (required, matches auth.uid)
+//   - createdAt: number (required)
+//
+// Collection: missions
+// Document ID: missionId (string)
+// Fields:
+//   - id: string (required)
+//   - title: string (required, size < 200)
+//   - teamCount: number (required, > 0)
+//   - cards: array (required, size < 100)
+//   - status: string (required, enum: active, closed)
+//   - joinCode: string (optional, size < 20)
+//   - createdAt: number (required)
+//   - closedAt: number (optional)
+//
+// Collection: users
+// Document ID: userId (string, matches auth.uid)
+// Fields:
+//   - id: string (required)
+//   - email: string (required, format: email)
+//   - role: string (required, enum: user, admin)
+//   - createdAt: number (required)
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "btobkorea@gmail.com" && request.auth.token.email_verified == true));
+    }
+    
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function hasOnlyAllowedFields(allowedFields) {
+      return request.resource.data.keys().hasOnly(allowedFields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return data.id is string &&
+             data.email is string && isValidEmail(data.email) &&
+             data.role in ['user', 'admin'] &&
+             data.createdAt is number;
+    }
+
+    function isValidPoll(data) {
+      return data.id is string &&
+             data.title is string && data.title.size() < 200 &&
+             data.questions is list && data.questions.size() < 50 &&
+             data.teams is list && data.teams.size() < 100 &&
+             data.status in ['setup', 'active', 'closed'] &&
+             data.createdAt is number;
+    }
+
+    function isValidVote(data) {
+      return data.pollId is string &&
+             data.questionId is string &&
+             data.optionIndex is number &&
+             data.userId == request.auth.uid &&
+             data.createdAt is number;
+    }
+
+    function isValidMission(data) {
+      return data.id is string &&
+             data.title is string && data.title.size() < 200 &&
+             data.teamCount is number && data.teamCount > 0 &&
+             data.cards is list && data.cards.size() < 100 &&
+             data.status in ['active', 'closed'] &&
+             data.createdAt is number;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && 
+                      (request.resource.data.role == 'user' || isAdmin());
+      allow update: if isAdmin() || (isOwner(userId) && request.resource.data.role == resource.data.role && isValidUser(request.resource.data));
+    }
+
+    match /polls/{pollId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAdmin() && isValidPoll(request.resource.data);
+      
+      match /votes/{voteId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && isValidVote(request.resource.data);
+        allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidVote(request.resource.data);
+      }
+    }
+
+    match /missions/{missionId} {
+      allow read: if isAuthenticated();
+      allow create, delete: if isAdmin() && isValidMission(request.resource.data);
+      allow update: if isAuthenticated() && isValidMission(request.resource.data); // Users can update cards when joining
+    }
+  }
+}

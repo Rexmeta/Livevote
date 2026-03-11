@@ -125,7 +125,7 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const selectedCard = mission.cards.find(c => c.id === selectedCardId);
+  const selectedCard = mission.cards?.find(c => c.id === selectedCardId);
   const selectedTemplate = selectedCard ? MISSION_TEMPLATES.find(t => t.id === selectedCard.templateId) : null;
 
   const handleClaim = () => {
@@ -187,7 +187,7 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
         </div>
 
         <div className="grid grid-cols-1 gap-6">
-          {mission.cards.filter(c => c.status !== "available").map((card, idx) => {
+          {mission.cards?.filter(c => c.status !== "available").map((card, idx) => {
             const template = MISSION_TEMPLATES.find(t => t.id === card.templateId);
             if (!template) return null;
 
@@ -291,7 +291,7 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
             </div>
             <div className="flex items-center gap-1">
               <Layout size={14} />
-              <span>{mission.cards.filter(c => c.status === "completed").length} / {mission.teamCount} Completed</span>
+              <span>{mission.cards?.filter(c => c.status === "completed").length || 0} / {mission.teamCount} Completed</span>
             </div>
           </div>
         </div>
@@ -311,7 +311,7 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {mission.cards.map((card, idx) => {
+        {mission.cards?.map((card, idx) => {
           const template = MISSION_TEMPLATES.find(t => t.id === card.templateId);
           if (!template) return null;
 

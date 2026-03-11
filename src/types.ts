@@ -39,6 +39,7 @@ export interface MissionActivity {
   id: string;
   title: string;
   teamCount: number;
+  joinedCount?: number;
   cards: MissionCard[];
   status: "active" | "closed";
   joinCode?: string;
@@ -52,10 +53,13 @@ export interface Poll {
   questions: Question[];
   teams: Team[];
   status: "setup" | "voting" | "closed";
-  joinCode: string;
-  registrationCode: string;
+  joinCode?: string;
+  hasPassword?: boolean;
+  registrationCode?: string;
   deadline?: number;
   createdAt: number;
+  teamCount?: number;
+  voteCount?: number;
 }
 
 export interface VoteResult {

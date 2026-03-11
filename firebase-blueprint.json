@@ -1,0 +1,82 @@
+{
+  "entities": {
+    "Poll": {
+      "title": "Poll",
+      "description": "A live poll or voting activity",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["general", "mission"] },
+        "title": { "type": "string" },
+        "questions": { "type": "array", "items": { "type": "object" } },
+        "teams": { "type": "array", "items": { "type": "object" } },
+        "status": { "type": "string", "enum": ["setup", "active", "closed"] },
+        "joinCode": { "type": "string" },
+        "registrationCode": { "type": "string" },
+        "deadline": { "type": "number" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "title", "questions", "teams", "status", "createdAt"]
+    },
+    "Vote": {
+      "title": "Vote",
+      "description": "A single vote cast by a user",
+      "type": "object",
+      "properties": {
+        "pollId": { "type": "string" },
+        "questionId": { "type": "string" },
+        "teamId": { "type": "string" },
+        "optionIndex": { "type": "number" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["pollId", "questionId", "optionIndex", "userId", "createdAt"]
+    },
+    "Mission": {
+      "title": "Mission",
+      "description": "A mission activity with cards",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "teamCount": { "type": "number" },
+        "cards": { "type": "array", "items": { "type": "object" } },
+        "status": { "type": "string", "enum": ["active", "closed"] },
+        "joinCode": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "closedAt": { "type": "number" }
+      },
+      "required": ["id", "title", "teamCount", "cards", "status", "createdAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Application user profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "email", "role", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/polls/{pollId}": {
+      "schema": "Poll",
+      "description": "Collection of polls"
+    },
+    "/polls/{pollId}/votes/{voteId}": {
+      "schema": "Vote",
+      "description": "Sub-collection of votes for a specific poll"
+    },
+    "/missions/{missionId}": {
+      "schema": "Mission",
+      "description": "Collection of missions"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    }
+  }
+}
