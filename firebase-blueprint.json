@@ -10,13 +10,14 @@
         "title": { "type": "string" },
         "questions": { "type": "array", "items": { "type": "object" } },
         "teams": { "type": "array", "items": { "type": "object" } },
-        "status": { "type": "string", "enum": ["setup", "active", "closed"] },
+        "status": { "type": "string", "enum": ["setup", "active", "closed", "voting"] },
         "joinCode": { "type": "string" },
         "registrationCode": { "type": "string" },
         "deadline": { "type": "number" },
+        "uid": { "type": "string" },
         "createdAt": { "type": "number" }
       },
-      "required": ["id", "title", "questions", "teams", "status", "createdAt"]
+      "required": ["id", "title", "questions", "teams", "status", "uid", "createdAt"]
     },
     "Vote": {
       "title": "Vote",
@@ -43,10 +44,11 @@
         "cards": { "type": "array", "items": { "type": "object" } },
         "status": { "type": "string", "enum": ["active", "closed"] },
         "joinCode": { "type": "string" },
+        "uid": { "type": "string" },
         "createdAt": { "type": "number" },
         "closedAt": { "type": "number" }
       },
-      "required": ["id", "title", "teamCount", "cards", "status", "createdAt"]
+      "required": ["id", "title", "teamCount", "cards", "status", "uid", "createdAt"]
     },
     "User": {
       "title": "User",

@@ -23,7 +23,7 @@ import { cn } from "../lib/utils";
 import { openMediaInNewTab } from "../lib/mediaUtils";
 import { Button } from "./Button";
 import { Card } from "./Card";
-import { MissionActivity, MissionCard, MediaItem } from "../types";
+import { MissionActivity, MissionCard, MediaItem, User } from "../types";
 import { MISSION_TEMPLATES } from "../constants";
 
 interface CreateMissionFormProps {
@@ -104,7 +104,9 @@ export const CreateMissionForm: React.FC<CreateMissionFormProps> = ({ onSubmit, 
 
 interface MissionBoardProps {
   mission: MissionActivity;
+  user: User | null;
   onUpdateStatus: (status: string) => void;
+  onResetCard: (cardId: string) => void;
   onAssignCard: (cardId: string, teamName: string, password?: string) => void;
   onSubmitResult: (cardId: string, result: string, password?: string, media?: MediaItem[]) => void;
   onViewMedia: (item: MediaItem) => void;
@@ -112,7 +114,9 @@ interface MissionBoardProps {
 
 export const MissionBoard: React.FC<MissionBoardProps> = ({ 
   mission, 
+  user,
   onUpdateStatus,
+  onResetCard,
   onAssignCard,
   onSubmitResult,
   onViewMedia
@@ -181,9 +185,16 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
             </div>
             <h2 className="text-4xl font-black tracking-tighter leading-none uppercase">{mission.title}</h2>
           </div>
-          <Button variant="ghost" onClick={() => window.location.reload()}>
-            <ArrowLeft size={16} className="mr-2" /> Back to Home
-          </Button>
+          <div className="flex items-center gap-3">
+            {(user?.role === "admin" || mission.uid === user?.id) && (
+              <Button variant="outline" onClick={() => onUpdateStatus("active")} className="border-amber-200 text-amber-700 hover:bg-amber-50">
+                Reopen Activity
+              </Button>
+            )}
+            <Button variant="ghost" onClick={() => window.location.reload()}>
+              <ArrowLeft size={16} className="mr-2" /> Back to Home
+            </Button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-6">
@@ -297,15 +308,17 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {mission.status === "active" ? (
-            <Button variant="primary" onClick={() => onUpdateStatus("closed")}>
-              Finish Activity
-            </Button>
-          ) : (
-            <div className="px-4 py-2 bg-zinc-100 text-zinc-500 rounded-xl font-bold text-sm flex items-center gap-2">
-              <CheckCircle2 size={16} />
-              Activity Completed
-            </div>
+          {(user?.role === "admin" || mission.uid === user?.id) && (
+            mission.status === "active" ? (
+              <Button variant="primary" onClick={() => onUpdateStatus("closed")}>
+                Finish Activity
+              </Button>
+            ) : (
+              <div className="px-4 py-2 bg-zinc-100 text-zinc-500 rounded-xl font-bold text-sm flex items-center gap-2">
+                <CheckCircle2 size={16} />
+                Activity Completed
+              </div>
+            )
           )}
         </div>
       </div>
@@ -391,15 +404,31 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
             className="bg-white rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl"
           >
             <div className="p-8 space-y-8">
-              <div className="flex justify-between items-start">
-                <div className="space-y-1">
-                  <div className="px-3 py-1 bg-zinc-100 text-zinc-500 rounded-full text-[10px] font-bold tracking-widest uppercase inline-block">
-                    Mission Card
+                <div className="flex justify-between items-start">
+                  <div className="space-y-1">
+                    <div className="px-3 py-1 bg-zinc-100 text-zinc-500 rounded-full text-[10px] font-bold tracking-widest uppercase inline-block">
+                      Mission Card
+                    </div>
+                    <h3 className="text-3xl font-black tracking-tighter uppercase">{selectedTemplate.cardTitle}</h3>
                   </div>
-                  <h3 className="text-3xl font-black tracking-tighter uppercase">{selectedTemplate.cardTitle}</h3>
+                  <div className="flex items-center gap-2">
+                    {(user?.role === "admin" || mission.uid === user?.id) && selectedCard.status !== "available" && (
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="text-red-500 hover:text-red-600 hover:bg-red-50"
+                        onClick={() => {
+                          onResetCard(selectedCard.id);
+                          setSelectedCardId(null);
+                        }}
+                      >
+                        <Trash2 size={16} className="mr-2" />
+                        Reset Card
+                      </Button>
+                    )}
+                    <Button variant="ghost" size="sm" onClick={() => setSelectedCardId(null)}>Close</Button>
+                  </div>
                 </div>
-                <Button variant="ghost" size="sm" onClick={() => setSelectedCardId(null)}>Close</Button>
-              </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div className="space-y-6">

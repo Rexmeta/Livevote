@@ -43,6 +43,7 @@ export interface MissionActivity {
   cards: MissionCard[];
   status: "active" | "closed";
   joinCode?: string;
+  uid: string;
   createdAt: number;
 }
 
@@ -57,6 +58,7 @@ export interface Poll {
   hasPassword?: boolean;
   registrationCode?: string;
   deadline?: number;
+  uid: string;
   createdAt: number;
   teamCount?: number;
   voteCount?: number;

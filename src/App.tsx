@@ -73,7 +73,9 @@ import {
   getUserProfile,
   createUserProfile,
   deletePoll as apiDeletePoll,
-  deleteMission as apiDeleteMission
+  deleteMission as apiDeleteMission,
+  arrayUnion,
+  arrayRemove
 } from "./services/firebaseService";
 import { cn } from "./lib/utils";
 import { openMediaInNewTab } from "./lib/mediaUtils";
@@ -244,8 +246,21 @@ function Auth({ onAuthSuccess, onCancel }: { onAuthSuccess: (user: User, token: 
       if (mode === "login") {
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         const profile = await getUserProfile(userCredential.user.uid);
+        const isAdminEmail = (userCredential.user.email?.toLowerCase() === "btobkorea@gmail.com" || email.toLowerCase() === "btobkorea@gmail.com");
+        
         if (profile) {
+          if (isAdminEmail && profile.role !== "admin") {
+            profile.role = "admin";
+          }
           onAuthSuccess(profile, await userCredential.user.getIdToken());
+        } else {
+          // Fallback if profile missing
+          const fallbackUser: User = {
+            id: userCredential.user.uid,
+            email: userCredential.user.email || email,
+            role: isAdminEmail ? "admin" : "user"
+          };
+          onAuthSuccess(fallbackUser, await userCredential.user.getIdToken());
         }
       } else {
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
@@ -260,7 +275,11 @@ function Auth({ onAuthSuccess, onCancel }: { onAuthSuccess: (user: User, token: 
       }
     } catch (err: any) {
       console.error("Auth error:", err);
-      setError(err.message || "Authentication failed");
+      if (err.code === "auth/network-request-failed") {
+        setError("Network error: Please check your connection or try again. If this persists, the Firebase project might still be provisioning.");
+      } else {
+        setError(err.message || "Authentication failed");
+      }
     } finally {
       setLoading(false);
     }
@@ -377,10 +396,23 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         const profile = await getUserProfile(firebaseUser.uid);
+        const isAdminEmail = firebaseUser.email?.toLowerCase() === "btobkorea@gmail.com";
+        
         if (profile) {
+          // Force admin role if email matches, even if Firestore is out of sync
+          if (isAdminEmail && profile.role !== "admin") {
+            profile.role = "admin";
+          }
           setUser(profile);
-          setToken(await firebaseUser.getIdToken());
+        } else {
+          // Fallback if profile doesn't exist in Firestore yet
+          setUser({
+            id: firebaseUser.uid,
+            email: firebaseUser.email || "",
+            role: isAdminEmail ? "admin" : "user"
+          });
         }
+        setToken(await firebaseUser.getIdToken());
       } else {
         setUser(null);
         setToken(null);
@@ -541,6 +573,7 @@ export default function App() {
       status: "available"
     }));
 
+    if (!user) return;
     const newMission: MissionActivity = {
       id,
       title: config.title,
@@ -548,6 +581,7 @@ export default function App() {
       cards,
       status: "active",
       joinCode: config.joinCode,
+      uid: user.id,
       createdAt: Date.now()
     };
 
@@ -687,6 +721,7 @@ export default function App() {
     const joinCode = config.password || null;
     const registrationCode = Math.random().toString(36).substring(2, 6).toUpperCase();
     
+    if (!user) return;
     const newPoll: Poll = {
       id,
       type: config.type,
@@ -701,6 +736,7 @@ export default function App() {
       joinCode,
       registrationCode,
       deadline: config.deadline ? Date.now() + config.deadline * 60000 : undefined,
+      uid: user.id,
       createdAt: Date.now()
     };
 
@@ -711,15 +747,15 @@ export default function App() {
     .catch(err => console.error("Error creating poll:", err));
   };
 
-  const handleRegisterTeam = async (teamName: string, media: MediaItem[]) => {
-    if (!currentPollId || !pollData) return;
+  const handleRegisterTeam = async (teamName: string, description: string, media: MediaItem[]) => {
+    if (!currentPollId) return;
     const newTeam: Team = {
       id: Math.random().toString(36).substring(2, 8).toUpperCase(),
       name: teamName,
+      description,
       media
     };
-    const updatedTeams = [...pollData.teams, newTeam];
-    await updatePoll(currentPollId, { teams: updatedTeams });
+    await updatePoll(currentPollId, { teams: arrayUnion(newTeam) as any });
   };
 
   const handleUpdateStatus = async (id: string, status: Poll["status"] | MissionActivity["status"]) => {
@@ -730,9 +766,41 @@ export default function App() {
     }
   };
 
+  const handleDeleteTeam = async (pollId: string, teamId: string) => {
+    if (!pollData) return;
+    if (!window.confirm("Are you sure you want to delete this team? All their data will be removed.")) return;
+    
+    const teamToRemove = pollData.teams.find(t => t.id === teamId);
+    if (!teamToRemove) return;
+
+    await updatePoll(pollId, { teams: arrayRemove(teamToRemove) as any });
+  };
+
+  const handleResetMissionCard = async (missionId: string, cardId: string) => {
+    if (!missionData) return;
+    if (!window.confirm("Are you sure you want to reset this card? All team progress for this card will be lost.")) return;
+
+    const updatedCards = missionData.cards.map(card => {
+      if (card.id === cardId) {
+        return {
+          ...card,
+          status: "available" as const,
+          teamName: undefined,
+          password: undefined,
+          result: undefined,
+          media: undefined
+        };
+      }
+      return card;
+    });
+
+    await updateMission(missionId, { cards: updatedCards });
+  };
+
   const handleVote = async (responses: { questionId: string; teamId?: string; optionIndex: number }[]) => {
-    if (!currentPollId || !user) return;
-    await castVote(currentPollId, user.id, responses);
+    if (!currentPollId) return;
+    const userId = user?.id || `guest_${Math.random().toString(36).substring(2, 10)}`;
+    await castVote(currentPollId, userId, responses);
     localStorage.setItem(`voted_${currentPollId}`, "true");
     navigateTo("results", currentPollId);
   };
@@ -768,15 +836,15 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
-            {user?.role === "admin" && (
+            {(user?.role === "admin" || user?.email?.toLowerCase() === "btobkorea@gmail.com") && (
               <Button 
                 variant="ghost" 
                 size="sm"
                 onClick={() => setView("admin")}
-                className={cn("px-2 sm:px-3", view === "admin" && "bg-zinc-100")}
+                className={cn("px-2 sm:px-3 border border-zinc-200 bg-zinc-50", view === "admin" && "bg-zinc-200 border-zinc-400")}
               >
-                <Shield size={18} />
-                <span className="hidden md:inline ml-2">Admin</span>
+                <Shield size={18} className="text-black" />
+                <span className="ml-2">Admin</span>
               </Button>
             )}
             {user ? (
@@ -881,8 +949,13 @@ export default function App() {
                       key={poll.id} 
                       className="group hover:border-black transition-all cursor-pointer p-8 flex flex-col justify-between aspect-square"
                       onClick={() => {
+                        const isAdmin = user?.role === "admin" || poll.uid === user?.id;
                         if (poll.type === "popularity" && poll.status === "setup") {
-                          navigateTo("team-upload", poll.id);
+                          if (isAdmin) {
+                            navigateTo("results", poll.id);
+                          } else {
+                            navigateTo("team-upload", poll.id);
+                          }
                         } else {
                           navigateTo("vote", poll.id);
                         }
@@ -918,7 +991,7 @@ export default function App() {
                             <span className="text-[10px] font-bold uppercase tracking-widest">{poll.voteCount || 0} Voted</span>
                           </div>
                         </div>
-                        {user?.role === "admin" && (
+                        {(user?.role === "admin" || poll.uid === user?.id) && (
                           <Button 
                             variant="ghost" 
                             size="sm" 
@@ -977,7 +1050,7 @@ export default function App() {
                               {mission.joinedCount || 0} / {mission.teamCount} Teams Joined
                             </span>
                           </div>
-                          {user?.role === "admin" && (
+                          {(user?.role === "admin" || mission.uid === user?.id) && (
                             <Button 
                               variant="ghost" 
                               size="sm" 
@@ -1068,6 +1141,7 @@ export default function App() {
             >
               <VoteInterface 
                 poll={pollData} 
+                user={user}
                 onVote={handleVote} 
                 onViewResults={() => navigateTo("results", currentPollId!)}
                 onViewMedia={(item) => setViewingMedia(item)}
@@ -1087,14 +1161,18 @@ export default function App() {
                 <ResultsDashboard 
                   poll={pollData} 
                   results={results} 
+                  user={user}
                   onVoteAgain={() => navigateTo("vote", currentPollId!)}
                   onUpdateStatus={handleUpdateStatus}
+                  onDeleteTeam={handleDeleteTeam}
                   onViewMedia={(item) => setViewingMedia(item)}
                 />
               ) : topTab === "mission" && missionData && !missionData.error ? (
                 <MissionBoard
                   mission={missionData}
+                  user={user}
                   onUpdateStatus={(status) => handleUpdateStatus(missionData.id, status)}
+                  onResetCard={(cardId) => handleResetMissionCard(missionData.id, cardId)}
                   onAssignCard={handleAssignCard}
                   onSubmitResult={handleSubmitMissionResult}
                   onViewMedia={(item) => setViewingMedia(item)}
@@ -1646,14 +1724,17 @@ function MediaGallery({ media, onViewMedia }: { media: MediaItem[]; onViewMedia:
   );
 }
 
-function TeamRegistrationView({ poll, onRegister, onViewMedia }: { poll: Poll; onRegister: (teamName: string, media: MediaItem[]) => void; onViewMedia: (item: MediaItem) => void }) {
+function TeamRegistrationView({ poll, onRegister, onViewMedia }: { poll: Poll; onRegister: (teamName: string, description: string, media: MediaItem[]) => void; onViewMedia: (item: MediaItem) => void }) {
   const [teamName, setTeamName] = useState("");
+  const [description, setDescription] = useState("");
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [newUrl, setNewUrl] = useState("");
   const [newType, setNewType] = useState<MediaItem["type"]>("image");
   const [newTitle, setNewTitle] = useState("");
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isJoined, setIsJoined] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const addMedia = () => {
     if (!newUrl) return;
@@ -1679,10 +1760,19 @@ function TeamRegistrationView({ poll, onRegister, onViewMedia }: { poll: Poll; o
     reader.readAsDataURL(file);
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!teamName.trim()) return;
-    onRegister(teamName, media);
-    setIsSubmitted(true);
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      await onRegister(teamName, description, media);
+      setIsSubmitted(true);
+    } catch (err) {
+      console.error("Registration error:", err);
+      setError("Failed to register team. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (!isJoined && !isSubmitted && poll.registrationCode) {
@@ -1720,6 +1810,16 @@ function TeamRegistrationView({ poll, onRegister, onViewMedia }: { poll: Poll; o
           value={teamName} 
           onChange={(e) => setTeamName(e.target.value)} 
         />
+
+        <div className="space-y-2">
+          <label className="text-sm font-bold uppercase tracking-widest text-zinc-400">Team Description</label>
+          <textarea 
+            className="w-full p-4 rounded-2xl border border-zinc-200 focus:border-black focus:ring-1 focus:ring-black transition-all min-h-[100px] text-sm"
+            placeholder="Tell us about your team and project..."
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </div>
 
         <div className="space-y-4 p-6 bg-zinc-50 rounded-2xl border border-zinc-200">
           <h3 className="text-sm font-bold uppercase tracking-widest text-zinc-400">Project Materials</h3>
@@ -1841,9 +1941,19 @@ function TeamRegistrationView({ poll, onRegister, onViewMedia }: { poll: Poll; o
         </div>
       </div>
 
+      {error && (
+        <div className="mb-6 p-4 bg-red-50 text-red-600 rounded-xl text-sm font-medium">
+          {error}
+        </div>
+      )}
+
       <div className="pt-6 border-t border-zinc-100">
-        <Button className="w-full py-4 rounded-2xl text-lg" onClick={handleSubmit} disabled={!teamName.trim()}>
-          Complete Registration
+        <Button 
+          className="w-full py-4 rounded-2xl text-lg" 
+          onClick={handleSubmit} 
+          disabled={!teamName.trim() || isSubmitting}
+        >
+          {isSubmitting ? "Registering..." : "Complete Registration"}
         </Button>
       </div>
     </Card>
@@ -1903,7 +2013,7 @@ function JoinCodeGate({ poll, onJoin, mode = "vote" }: { poll: Poll; onJoin: () 
   );
 }
 
-function VoteInterface({ poll, onVote, onViewResults, onViewMedia }: { poll: Poll; onVote: (responses: { questionId: string; teamId?: string; optionIndex: number }[]) => void; onViewResults: () => void; onViewMedia: (item: MediaItem) => void }) {
+function VoteInterface({ poll, user, onVote, onViewResults, onViewMedia }: { poll: Poll; user: User | null; onVote: (responses: { questionId: string; teamId?: string; optionIndex: number }[]) => void; onViewResults: () => void; onViewMedia: (item: MediaItem) => void }) {
   const [selections, setSelections] = useState<Record<string, number>>({});
   const [isJoined, setIsJoined] = useState(false);
   const hasVoted = localStorage.getItem(`voted_${poll.id}`) === "true";
@@ -1967,9 +2077,20 @@ function VoteInterface({ poll, onVote, onViewResults, onViewMedia }: { poll: Pol
             Please check back later.
           </p>
         </div>
-        <Button variant="outline" onClick={() => window.location.reload()}>
-          Refresh Page
-        </Button>
+        <div className="flex flex-col sm:flex-row gap-3 justify-center">
+          <Button variant="outline" onClick={() => {
+            // Re-trigger data fetch if possible, but don't reload page
+            const url = new URL(window.location.href);
+            window.history.pushState({}, "", url);
+          }}>
+            Refresh
+          </Button>
+          {(user?.role === "admin" || poll.uid === user?.id) && (
+            <Button onClick={onViewResults}>
+              Go to Dashboard
+            </Button>
+          )}
+        </div>
       </Card>
     );
   }
@@ -1984,9 +2105,20 @@ function VoteInterface({ poll, onVote, onViewResults, onViewMedia }: { poll: Pol
           <h2 className="text-2xl font-bold">No Teams Registered</h2>
           <p className="text-zinc-500">Wait for teams to register their projects before voting starts.</p>
         </div>
-        <Button variant="outline" onClick={() => window.location.reload()}>
-          Refresh
-        </Button>
+        <div className="flex flex-col sm:flex-row gap-3 justify-center">
+          <Button variant="outline" onClick={() => {
+            // Re-trigger data fetch if possible, but don't reload page
+            const url = new URL(window.location.href);
+            window.history.pushState({}, "", url);
+          }}>
+            Refresh
+          </Button>
+          {(user?.role === "admin" || poll.uid === user?.id) && (
+            <Button onClick={onViewResults}>
+              Go to Dashboard
+            </Button>
+          )}
+        </div>
       </Card>
     );
   }
@@ -2147,7 +2279,15 @@ function VoteInterface({ poll, onVote, onViewResults, onViewMedia }: { poll: Pol
   );
 }
 
-function ResultsDashboard({ poll, results, onVoteAgain, onUpdateStatus, onViewMedia }: { poll: Poll; results: VoteResult[]; onVoteAgain: () => void; onUpdateStatus: (id: string, status: Poll["status"]) => void; onViewMedia: (item: MediaItem) => void }) {
+function ResultsDashboard({ poll, results, user, onVoteAgain, onUpdateStatus, onDeleteTeam, onViewMedia }: { 
+  poll: Poll; 
+  results: VoteResult[]; 
+  user: User | null; 
+  onVoteAgain: () => void; 
+  onUpdateStatus: (id: string, status: Poll["status"]) => void; 
+  onDeleteTeam: (pollId: string, teamId: string) => void;
+  onViewMedia: (item: MediaItem) => void 
+}) {
   const [copied, setCopied] = useState(false);
   const [copiedTeamId, setCopiedTeamId] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState<string>("");
@@ -2231,20 +2371,34 @@ function ResultsDashboard({ poll, results, onVoteAgain, onUpdateStatus, onViewMe
         </div>
 
         <div className="flex flex-wrap gap-2">
-          {poll.status === "setup" && (
-            <Button onClick={() => onUpdateStatus(poll.id, "voting")} className="bg-emerald-600 hover:bg-emerald-700">
-              Start Voting
-            </Button>
-          )}
-          {poll.status === "voting" && (
-            <Button onClick={() => onUpdateStatus(poll.id, "closed")} variant="outline">
-              Close Voting
-            </Button>
-          )}
-          {poll.status === "closed" && (
-            <Button onClick={() => onUpdateStatus(poll.id, "voting")} variant="outline">
-              Reopen Voting
-            </Button>
+          {(user?.role === "admin" || poll.uid === user?.id) && (
+            <div className="flex flex-wrap gap-2">
+              {poll.status === "setup" && (
+                <Button onClick={() => onUpdateStatus(poll.id, "voting")} className="bg-emerald-600 hover:bg-emerald-700">
+                  Start Voting
+                </Button>
+              )}
+              {poll.status === "voting" && (
+                <>
+                  <Button onClick={() => onUpdateStatus(poll.id, "setup")} variant="outline" className="border-amber-200 text-amber-700 hover:bg-amber-50">
+                    Back to Registration
+                  </Button>
+                  <Button onClick={() => onUpdateStatus(poll.id, "closed")} variant="primary">
+                    Close Voting
+                  </Button>
+                </>
+              )}
+              {poll.status === "closed" && (
+                <>
+                  <Button onClick={() => onUpdateStatus(poll.id, "setup")} variant="outline" className="border-amber-200 text-amber-700 hover:bg-amber-50">
+                    Back to Registration
+                  </Button>
+                  <Button onClick={() => onUpdateStatus(poll.id, "voting")} variant="outline">
+                    Reopen Voting
+                  </Button>
+                </>
+              )}
+            </div>
           )}
           <Button variant="outline" onClick={copyLink} className="rounded-xl">
             {copied ? <Check size={18} className="text-emerald-500" /> : <Share2 size={18} />}
@@ -2328,46 +2482,84 @@ function ResultsDashboard({ poll, results, onVoteAgain, onUpdateStatus, onViewMe
           {poll.type === "popularity" ? (
             <div className="space-y-8">
               <div className="flex items-center justify-between">
-                <h3 className="text-2xl font-bold">Popularity Results</h3>
+                <h3 className="text-2xl font-bold">
+                  {poll.status === "setup" ? "Registered Teams" : "Popularity Results"}
+                </h3>
                 <div className="text-sm font-bold text-zinc-400 uppercase tracking-widest">
-                  {results.length} Total Votes
+                  {poll.status === "setup" ? `${poll.teams.length} Teams` : `${results.length} Total Votes`}
                 </div>
               </div>
               
-              <Card className="p-8">
-                <div className="space-y-8">
-                  {poll.teams.map((team, index) => {
-                    const teamVotes = results.filter(r => r.teamId === team.id).length;
-                    const percentage = results.length > 0 ? (teamVotes / results.length) * 100 : 0;
-                    
-                    return (
-                      <div key={team.id} className="space-y-3">
-                        <div className="flex justify-between items-end">
-                          <div className="space-y-1">
-                            <p className="font-bold text-lg">{team.name}</p>
-                            <p className="text-xs text-zinc-400 font-medium">{teamVotes} votes</p>
+              {poll.status !== "setup" && (
+                <Card className="p-8">
+                  <div className="space-y-8">
+                    {poll.teams.map((team, index) => {
+                      const teamVotes = results.filter(r => r.teamId === team.id).length;
+                      const percentage = results.length > 0 ? (teamVotes / results.length) * 100 : 0;
+                      
+                      return (
+                        <div key={team.id} className="space-y-3">
+                          <div className="flex justify-between items-end">
+                            <div className="space-y-1">
+                              <p className="font-bold text-lg">{team.name}</p>
+                              <p className="text-xs text-zinc-400 font-medium">{teamVotes} votes</p>
+                            </div>
+                            <p className="font-mono font-bold text-xl">{percentage.toFixed(1)}%</p>
                           </div>
-                          <p className="font-mono font-bold text-xl">{percentage.toFixed(1)}%</p>
+                          <div className="h-4 bg-zinc-100 rounded-full overflow-hidden">
+                            <motion.div 
+                              initial={{ width: 0 }}
+                              animate={{ width: `${percentage}%` }}
+                              className="h-full bg-black rounded-full"
+                            />
+                          </div>
                         </div>
-                        <div className="h-4 bg-zinc-100 rounded-full overflow-hidden">
-                          <motion.div 
-                            initial={{ width: 0 }}
-                            animate={{ width: `${percentage}%` }}
-                            className="h-full bg-black rounded-full"
-                          />
+                      );
+                    })}
+                  </div>
+                </Card>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
+                {poll.teams.map(team => (
+                  <Card key={team.id} className="p-6 space-y-6 border-zinc-100 hover:border-zinc-300 transition-all">
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-start">
+                        <h4 className="text-xl font-black uppercase tracking-tight">{team.name}</h4>
+                        <div className="flex items-center gap-2">
+                          {(user?.role === "admin" || poll.uid === user?.id) && (
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="text-red-500 hover:text-red-600 hover:bg-red-50"
+                              onClick={() => onDeleteTeam(poll.id, team.id)}
+                            >
+                              <Trash2 size={16} />
+                            </Button>
+                          )}
+                          {poll.status !== "setup" && (
+                            <div className="px-3 py-1 bg-zinc-100 rounded-full text-[10px] font-bold">
+                              {results.filter(r => r.teamId === team.id).length} votes
+                            </div>
+                          )}
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              </Card>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 pt-8">
-                {poll.teams.map(team => (
-                  <div key={team.id} className="space-y-4">
-                    <h4 className="font-bold text-zinc-400 uppercase tracking-widest text-[10px]">{team.name} Materials</h4>
-                    <MediaGallery media={team.media} onViewMedia={onViewMedia} />
-                  </div>
+                      {team.description && (
+                        <p className="text-zinc-500 text-sm font-medium leading-relaxed">{team.description}</p>
+                      )}
+                    </div>
+                    <div className="space-y-3">
+                      <h5 className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Uploaded Materials</h5>
+                      {team.media && team.media.length > 0 ? (
+                        <MediaGallery media={team.media} onViewMedia={onViewMedia} />
+                      ) : (
+                        <div className="py-8 bg-zinc-50 rounded-xl border border-dashed border-zinc-200 flex flex-col items-center justify-center gap-2">
+                          <ImageIcon className="text-zinc-300" size={24} />
+                          <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">No materials uploaded</span>
+                        </div>
+                      )}
+                    </div>
+                  </Card>
                 ))}
               </div>
             </div>

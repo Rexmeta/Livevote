@@ -94,7 +94,8 @@ service cloud.firestore {
              data.title is string && data.title.size() < 200 &&
              data.questions is list && data.questions.size() < 50 &&
              data.teams is list && data.teams.size() < 100 &&
-             data.status in ['setup', 'active', 'closed'] &&
+             data.status in ['setup', 'active', 'closed', 'voting'] &&
+             data.uid is string &&
              data.createdAt is number;
     }
 
@@ -102,7 +103,8 @@ service cloud.firestore {
       return data.pollId is string &&
              data.questionId is string &&
              data.optionIndex is number &&
-             data.userId == request.auth.uid &&
+             data.userId is string &&
+             (request.auth == null || data.userId == request.auth.uid) &&
              data.createdAt is number;
     }
 
@@ -112,6 +114,7 @@ service cloud.firestore {
              data.teamCount is number && data.teamCount > 0 &&
              data.cards is list && data.cards.size() < 100 &&
              data.status in ['active', 'closed'] &&
+             data.uid is string &&
              data.createdAt is number;
     }
 
@@ -127,20 +130,27 @@ service cloud.firestore {
     }
 
     match /polls/{pollId} {
-      allow read: if isAuthenticated();
-      allow create, update, delete: if isAdmin() && isValidPoll(request.resource.data);
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidPoll(request.resource.data) && request.resource.data.uid == request.auth.uid;
+      allow update: if isAdmin() || 
+                      (isAuthenticated() && resource.data.uid == request.auth.uid && isValidPoll(request.resource.data)) ||
+                      (resource.data.status == 'setup' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['teams']) && isValidPoll(request.resource.data));
+      allow delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
       
       match /votes/{voteId} {
-        allow read: if isAuthenticated();
-        allow create: if isAuthenticated() && isValidVote(request.resource.data);
+        allow read: if true;
+        allow create: if isValidVote(request.resource.data);
         allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidVote(request.resource.data);
       }
     }
 
     match /missions/{missionId} {
-      allow read: if isAuthenticated();
-      allow create, delete: if isAdmin() && isValidMission(request.resource.data);
-      allow update: if isAuthenticated() && isValidMission(request.resource.data); // Users can update cards when joining
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidMission(request.resource.data) && request.resource.data.uid == request.auth.uid;
+      allow delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      allow update: if isValidMission(request.resource.data) && 
+                      (isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid) || 
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cards']));
     }
   }
 }
