@@ -16,7 +16,7 @@ import {
   arrayUnion,
   arrayRemove
 } from 'firebase/firestore';
-export { arrayUnion, arrayRemove };
+export { arrayUnion, arrayRemove, increment };
 import { db, auth } from '../firebase';
 import { Poll, MissionActivity, VoteResult, User } from '../types';
 
@@ -134,11 +134,13 @@ export const createPoll = async (poll: Poll) => {
   }
 };
 
-export const updatePoll = async (id: string, data: Partial<Poll>) => {
+export const updatePoll = async (id: string, data: any) => {
   const path = `polls/${id}`;
+  console.log("Updating poll:", { id, data, path });
   try {
     await updateDoc(doc(db, 'polls', id), data);
   } catch (error) {
+    console.error("Update poll error:", error);
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
 };
@@ -165,9 +167,12 @@ export const castVote = async (pollId: string, userId: string, responses: any[])
         pollId,
         userId,
         ...resp,
+        teamId: resp.teamId || null,
         createdAt: Date.now()
       });
     }
+    const pollRef = doc(db, 'polls', pollId);
+    batch.update(pollRef, { voteCount: increment(1) });
     await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
@@ -263,10 +268,19 @@ export const createMission = async (mission: MissionActivity) => {
   }
 };
 
-export const updateMission = async (id: string, data: Partial<MissionActivity>) => {
+export const updateMission = async (id: string, data: any) => {
   const path = `missions/${id}`;
+  
+  // Remove undefined values to prevent Firestore update error
+  const cleanData = { ...data };
+  Object.keys(cleanData).forEach(key => {
+    if (cleanData[key] === undefined) {
+      delete cleanData[key];
+    }
+  });
+
   try {
-    await updateDoc(doc(db, 'missions', id), data);
+    await updateDoc(doc(db, 'missions', id), cleanData);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }

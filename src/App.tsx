@@ -50,7 +50,8 @@ import {
   PieChart,
   Pie
 } from "recharts";
-import { auth } from "./firebase";
+import { auth, storage } from "./firebase";
+import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { 
   onAuthStateChanged, 
   signInWithEmailAndPassword, 
@@ -75,12 +76,14 @@ import {
   deletePoll as apiDeletePoll,
   deleteMission as apiDeleteMission,
   arrayUnion,
-  arrayRemove
+  arrayRemove,
+  increment
 } from "./services/firebaseService";
 import { cn } from "./lib/utils";
 import { openMediaInNewTab } from "./lib/mediaUtils";
 import { Poll, VoteResult, AppView, MediaItem, Team, MissionActivity, MissionCard, User } from "./types";
 import { MISSION_TEMPLATES } from "./constants";
+import { PasswordModal } from "./components/PasswordModal";
 import { CreateMissionForm, MissionBoard } from "./components/Mission";
 import { MediaViewer } from "./components/MediaViewer";
 import { Button } from "./components/Button";
@@ -128,12 +131,12 @@ function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (vie
 
   const deletePoll = async (id: string) => {
     await apiDeletePoll(id);
-    fetchData();
+    await fetchData();
   };
 
   const deleteMission = async (id: string) => {
     await apiDeleteMission(id);
-    fetchData();
+    await fetchData();
   };
 
   if (loading) return <div className="flex justify-center py-20"><Clock className="animate-spin text-zinc-300" size={48} /></div>;
@@ -170,7 +173,12 @@ function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (vie
                 <div className="flex items-center gap-2">
                   <Button variant="ghost" size="sm" onClick={() => onNavigate("results", poll.id)}>View</Button>
                   <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-600" onClick={() => {
-                    if (window.confirm("Delete this poll?")) deletePoll(poll.id);
+                    {
+                      setConfirmTitle("투표 삭제");
+                      setConfirmMessage("정말 이 투표를 삭제하시겠습니까?");
+                      setConfirmAction(() => () => deletePoll(poll.id));
+                      setShowConfirmModal(true);
+                    }
                   }}>
                     <Trash2 size={16} />
                   </Button>
@@ -207,7 +215,12 @@ function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (vie
                     window.location.reload(); 
                   }}>View</Button>
                   <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-600" onClick={() => {
-                    if (window.confirm("Delete this mission?")) deleteMission(mission.id);
+                    {
+                      setConfirmTitle("미션 삭제");
+                      setConfirmMessage("정말 이 미션을 삭제하시겠습니까?");
+                      setConfirmAction(() => () => deleteMission(mission.id));
+                      setShowConfirmModal(true);
+                    }
                   }}>
                     <Trash2 size={16} />
                   </Button>
@@ -375,7 +388,10 @@ export default function App() {
   const [pendingMissionId, setPendingMissionId] = useState<string | null>(null);
   const [pendingPollId, setPendingPollId] = useState<string | null>(null);
   const [pendingPollView, setPendingPollView] = useState<AppView | null>(null);
-  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<(() => void) | null>(null);
+  const [confirmTitle, setConfirmTitle] = useState("");
+  const [confirmMessage, setConfirmMessage] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordError, setPasswordError] = useState(false);
   const [user, setUser] = useState<User | null>(null);
@@ -388,6 +404,7 @@ export default function App() {
     return id;
   });
   const [viewingMedia, setViewingMedia] = useState<MediaItem | null>(null);
+  const [resetCardId, setResetCardId] = useState<string | null>(null);
   const [showJoinCodeModal, setShowJoinCodeModal] = useState(false);
   const [joinCodeInfo, setJoinCodeInfo] = useState<{ title: string; joinCode?: string; registrationCode?: string } | null>(null);
 
@@ -580,9 +597,10 @@ export default function App() {
       teamCount: config.teamCount,
       cards,
       status: "active",
-      joinCode: config.joinCode,
+      ...(config.joinCode && { joinCode: config.joinCode }),
       uid: user.id,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      joinedCount: 0
     };
 
     createMission(newMission)
@@ -597,17 +615,23 @@ export default function App() {
     const updatedCards = missionData.cards.map(c => 
       c.id === cardId ? { ...c, teamName, password, status: "assigned" as const } : c
     );
-    await updateMission(currentMissionId, { cards: updatedCards });
+    const newJoinedCount = (missionData.joinedCount || 0) + 1;
+    await updateMission(currentMissionId, { cards: updatedCards, joinedCount: newJoinedCount });
   };
 
   const handleSubmitMissionResult = async (cardId: string, result: string, password?: string, media?: MediaItem[]) => {
-    if (!currentMissionId || !missionData) return;
-    const card = missionData.cards.find(c => c.id === cardId);
+    if (!currentMissionId) return;
+    
+    const latestMission = await getMission(currentMissionId);
+    if (!latestMission) return;
+    
+    const card = latestMission.cards.find(c => c.id === cardId);
     if (card?.password && card.password !== password) {
       alert("Invalid card password");
       return;
     }
-    const updatedCards = missionData.cards.map(c => 
+    
+    const updatedCards = latestMission.cards.map(c => 
       c.id === cardId ? { ...c, result, media, status: "completed" as const } : c
     );
     await updateMission(currentMissionId, { cards: updatedCards });
@@ -735,9 +759,11 @@ export default function App() {
       status: config.type === "general" ? "voting" : "setup",
       joinCode,
       registrationCode,
-      deadline: config.deadline ? Date.now() + config.deadline * 60000 : undefined,
+      deadline: config.deadline ? Date.now() + config.deadline * 60000 : null,
       uid: user.id,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      teamCount: 0,
+      voteCount: 0
     };
 
     createPoll(newPoll)
@@ -755,7 +781,7 @@ export default function App() {
       description,
       media
     };
-    await updatePoll(currentPollId, { teams: arrayUnion(newTeam) as any });
+    await updatePoll(currentPollId, { teams: arrayUnion(newTeam) as any, teamCount: increment(1) });
   };
 
   const handleUpdateStatus = async (id: string, status: Poll["status"] | MissionActivity["status"]) => {
@@ -768,38 +794,58 @@ export default function App() {
 
   const handleDeleteTeam = async (pollId: string, teamId: string) => {
     if (!pollData) return;
-    if (!window.confirm("Are you sure you want to delete this team? All their data will be removed.")) return;
     
     const teamToRemove = pollData.teams.find(t => t.id === teamId);
     if (!teamToRemove) return;
 
-    await updatePoll(pollId, { teams: arrayRemove(teamToRemove) as any });
+    setConfirmTitle("팀 삭제");
+    setConfirmMessage("정말 이 팀을 삭제하시겠습니까? 모든 데이터가 삭제됩니다.");
+    setConfirmAction(() => async () => {
+      await updatePoll(pollId, { teams: arrayRemove(teamToRemove) as any, teamCount: increment(-1) });
+    });
+    setShowConfirmModal(true);
   };
 
-  const handleResetMissionCard = async (missionId: string, cardId: string) => {
+  const handleResetMissionCard = async (missionId: string, cardId: string, password: string) => {
     if (!missionData) return;
-    if (!window.confirm("Are you sure you want to reset this card? All team progress for this card will be lost.")) return;
+    
+    const card = missionData.cards.find(c => c.id === cardId);
+    if (!card) return;
 
+    if (card.password && password !== card.password) {
+      alert("비밀번호가 일치하지 않습니다.");
+      return;
+    }
+    
     const updatedCards = missionData.cards.map(card => {
       if (card.id === cardId) {
         return {
           ...card,
           status: "available" as const,
-          teamName: undefined,
-          password: undefined,
-          result: undefined,
-          media: undefined
+          teamName: null as any,
+          password: null as any,
+          result: null as any,
+          media: null as any
         };
       }
       return card;
     });
 
-    await updateMission(missionId, { cards: updatedCards });
+    const newJoinedCount = Math.max((missionData.joinedCount || 0) - 1, 0);
+    await updateMission(missionId, { cards: updatedCards, joinedCount: newJoinedCount });
+    setResetCardId(null);
+    setShowPasswordModal(false);
   };
 
   const handleVote = async (responses: { questionId: string; teamId?: string; optionIndex: number }[]) => {
+    console.log("handleVote called", { currentPollId, responses });
     if (!currentPollId) return;
+    if (localStorage.getItem(`voted_${currentPollId}`)) {
+      alert("이미 투표하셨습니다.");
+      return;
+    }
     const userId = user?.id || `guest_${Math.random().toString(36).substring(2, 10)}`;
+    console.log("Casting vote for user:", userId);
     await castVote(currentPollId, userId, responses);
     localStorage.setItem(`voted_${currentPollId}`, "true");
     navigateTo("results", currentPollId);
@@ -967,11 +1013,12 @@ export default function App() {
                             {poll.hasPassword && <Lock size={12} className="text-zinc-600" />}
                             <div className={cn(
                               "px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase",
+                              poll.type === "popularity" ? "bg-violet-100 text-violet-700" :
                               poll.status === "closed" ? "bg-zinc-200 text-zinc-600" : 
                               poll.status === "voting" ? "bg-emerald-100 text-emerald-600" :
                               "bg-blue-100 text-blue-600"
                             )}>
-                              {poll.status === "setup" ? "Registration" : poll.status}
+                              {poll.type === "popularity" ? "인기 투표" : (poll.status === "setup" ? "Registration" : poll.status)}
                             </div>
                           </div>
                           <div className="text-xs font-bold text-zinc-300">#{poll.id}</div>
@@ -983,7 +1030,7 @@ export default function App() {
                           {poll.type === "popularity" && (
                             <div className="flex items-center gap-1.5 text-zinc-400">
                               <Users size={14} />
-                              <span className="text-[10px] font-bold uppercase tracking-widest">{poll.teamCount || 0} Registered</span>
+                              <span className="text-[10px] font-bold uppercase tracking-widest">{poll.teams.length} Registered</span>
                             </div>
                           )}
                           <div className="flex items-center gap-1.5 text-zinc-400">
@@ -1047,7 +1094,7 @@ export default function App() {
                           <div className="flex items-center gap-2 text-zinc-400">
                             <Users size={16} />
                             <span className="text-xs font-bold uppercase tracking-widest">
-                              {mission.joinedCount || 0} / {mission.teamCount} Teams Joined
+                              {mission.cards.filter(c => c.status === 'completed').length} / {mission.teamCount} Completed
                             </span>
                           </div>
                           {(user?.role === "admin" || mission.uid === user?.id) && (
@@ -1172,7 +1219,10 @@ export default function App() {
                   mission={missionData}
                   user={user}
                   onUpdateStatus={(status) => handleUpdateStatus(missionData.id, status)}
-                  onResetCard={(cardId) => handleResetMissionCard(missionData.id, cardId)}
+                  onResetCard={(cardId) => {
+                    setResetCardId(cardId);
+                    setShowPasswordModal(true);
+                  }}
                   onAssignCard={handleAssignCard}
                   onSubmitResult={handleSubmitMissionResult}
                   onViewMedia={(item) => setViewingMedia(item)}
@@ -1205,6 +1255,20 @@ export default function App() {
       </main>
 
       <MediaViewer item={viewingMedia} onClose={() => setViewingMedia(null)} />
+      <PasswordModal
+        isOpen={showPasswordModal}
+        onClose={() => {
+          setShowPasswordModal(false);
+          setResetCardId(null);
+        }}
+        onConfirm={(password) => {
+          if (resetCardId && missionData) {
+            handleResetMissionCard(missionData.id, resetCardId, password);
+          }
+        }}
+        title="카드 리셋"
+        message="이 작업은 모든 팀 진행 상황을 영구적으로 삭제하며 되돌릴 수 없습니다. 비밀번호를 입력하여 확인해주세요."
+      />
 
       {/* Footer */}
       <footer className="py-12 border-t border-zinc-200 mt-auto">
@@ -1287,20 +1351,38 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {showPasswordModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+        {showConfirmModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="w-full max-w-sm"
+              className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl space-y-6"
             >
-              <Card className="p-8 space-y-6 shadow-2xl">
-                <div className="space-y-2 text-center">
-                  <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
-                    <Zap size={24} />
-                  </div>
-                  <h3 className="text-xl font-black uppercase tracking-tight">Access Required</h3>
+              <div className="space-y-2 text-center">
+                <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <AlertTriangle size={32} />
+                </div>
+                <h3 className="text-2xl font-black tracking-tighter uppercase">{confirmTitle}</h3>
+                <p className="text-zinc-500 font-medium text-sm">{confirmMessage}</p>
+                <p className="text-red-500 font-bold text-xs mt-2">이 작업은 되돌릴 수 없습니다.</p>
+              </div>
+
+              <div className="flex gap-3">
+                <Button variant="ghost" className="flex-1 py-4 rounded-2xl" onClick={() => setShowConfirmModal(false)}>
+                  취소
+                </Button>
+                <Button className="flex-1 py-4 rounded-2xl bg-red-600 hover:bg-red-700" onClick={() => {
+                  confirmAction?.();
+                  setShowConfirmModal(false);
+                }}>
+                  삭제
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
                   <p className="text-zinc-500 text-sm font-medium">This mission activity is password protected.</p>
                 </div>
 
@@ -1735,6 +1817,7 @@ function TeamRegistrationView({ poll, onRegister, onViewMedia }: { poll: Poll; o
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isJoined, setIsJoined] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
   const addMedia = () => {
     if (!newUrl) return;
@@ -1748,16 +1831,35 @@ function TeamRegistrationView({ poll, onRegister, onViewMedia }: { poll: Poll; o
     setMedia(media.filter((_, i) => i !== index));
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: "image" | "video") => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: "image" | "video") => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64String = reader.result as string;
-      setMedia(prev => [...prev, { type, url: base64String, title: file.name }]);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const storageRef = ref(storage, `media/${Date.now()}_${file.name}`);
+      const uploadTask = uploadBytesResumable(storageRef, file);
+
+      uploadTask.on('state_changed', 
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          setUploadProgress(progress);
+        }, 
+        (error) => {
+          console.error("Upload error:", error);
+          setError("Failed to upload file. Please try again.");
+          setUploadProgress(null);
+        }, 
+        async () => {
+          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+          setMedia(prev => [...prev, { type, url: downloadURL, title: file.name }]);
+          setUploadProgress(null);
+        }
+      );
+    } catch (error) {
+      console.error("Upload error:", error);
+      setError("Failed to upload file. Please try again.");
+      setUploadProgress(null);
+    }
   };
 
   const handleSubmit = async () => {
@@ -1767,9 +1869,14 @@ function TeamRegistrationView({ poll, onRegister, onViewMedia }: { poll: Poll; o
     try {
       await onRegister(teamName, description, media);
       setIsSubmitted(true);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Registration error:", err);
-      setError("Failed to register team. Please try again.");
+      try {
+        const errorInfo = JSON.parse(err.message);
+        setError(errorInfo.error || "Failed to register team. Please try again.");
+      } catch {
+        setError("Failed to register team. Please try again.");
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -1874,6 +1981,15 @@ function TeamRegistrationView({ poll, onRegister, onViewMedia }: { poll: Poll; o
               <span className="text-[10px] font-bold uppercase">Video</span>
               <input type="file" accept="video/*" className="hidden" onChange={(e) => handleFileUpload(e, "video")} />
             </label>
+
+            {uploadProgress !== null && (
+              <div className="w-full col-span-full mt-2">
+                <div className="w-full bg-zinc-200 rounded-full h-2.5">
+                  <div className="bg-black h-2.5 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }}></div>
+                </div>
+                <p className="text-xs text-zinc-500 mt-1">Uploading: {Math.round(uploadProgress)}%</p>
+              </div>
+            )}
           </div>
 
           <div className="space-y-4 border-t border-zinc-200 pt-6">
@@ -2017,6 +2133,7 @@ function VoteInterface({ poll, user, onVote, onViewResults, onViewMedia }: { pol
   const [selections, setSelections] = useState<Record<string, number>>({});
   const [isJoined, setIsJoined] = useState(false);
   const hasVoted = localStorage.getItem(`voted_${poll.id}`) === "true";
+  console.log("VoteInterface state:", { isJoined, hasVoted, pollStatus: poll.status });
 
   const handleSelect = (questionId: string, teamId: string | undefined, optionIndex: number) => {
     const key = teamId ? `${questionId}_${teamId}` : questionId;
@@ -2034,8 +2151,10 @@ function VoteInterface({ poll, user, onVote, onViewResults, onViewMedia }: { pol
     }
     return poll.questions.every(q => selections[q.id] !== undefined);
   }, [poll, selections]);
+  console.log("isComplete:", isComplete);
 
   const handleSubmit = () => {
+    console.log("handleSubmit called", { selections, poll });
     let responses: any[] = [];
     if (poll.type === "popularity") {
       const optionIndex = selections[poll.questions[0].id];
@@ -2057,6 +2176,7 @@ function VoteInterface({ poll, user, onVote, onViewResults, onViewMedia }: { pol
         };
       });
     }
+    console.log("Submitting responses:", responses);
     onVote(responses);
   };
 

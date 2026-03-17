@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Target, 
@@ -25,6 +25,8 @@ import { Button } from "./Button";
 import { Card } from "./Card";
 import { MissionActivity, MissionCard, MediaItem, User } from "../types";
 import { MISSION_TEMPLATES } from "../constants";
+import { storage } from "../firebase";
+import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
 interface CreateMissionFormProps {
   onSubmit: (config: { title: string; teamCount: number; joinCode?: string }) => void;
@@ -128,6 +130,19 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
   const [resultText, setResultText] = useState("");
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [activeUploadCount, setActiveUploadCount] = useState(0);
+
+  useEffect(() => {
+    setTeamName("");
+    setCardPassword("");
+    setVerifyPassword("");
+    setResultText("");
+    setMediaItems([]);
+    setError(null);
+    setUploadProgress(null);
+    setActiveUploadCount(0);
+  }, [selectedCardId]);
 
   const selectedCard = mission.cards?.find(c => c.id === selectedCardId);
   const selectedTemplate = selectedCard ? MISSION_TEMPLATES.find(t => t.id === selectedCard.templateId) : null;
@@ -157,16 +172,39 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: "image" | "video") => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: "image" | "video") => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64String = reader.result as string;
-      setMediaItems(prev => [...prev, { type, url: base64String, title: file.name }]);
-    };
-    reader.readAsDataURL(file);
+    try {
+      setActiveUploadCount(prev => prev + 1);
+      const storageRef = ref(storage, `media/${Date.now()}_${file.name}`);
+      const uploadTask = uploadBytesResumable(storageRef, file);
+
+      uploadTask.on('state_changed', 
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          setUploadProgress(progress);
+        }, 
+        (error) => {
+          console.error("Upload error:", error);
+          setError("Failed to upload file. Please try again.");
+          setUploadProgress(null);
+          setActiveUploadCount(prev => prev - 1);
+        }, 
+        async () => {
+          const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+          setMediaItems(prev => [...prev, { type, url: downloadURL, title: file.name }]);
+          setUploadProgress(null);
+          setActiveUploadCount(prev => prev - 1);
+        }
+      );
+    } catch (error) {
+      console.error("Upload error:", error);
+      setError("Failed to upload file. Please try again.");
+      setUploadProgress(null);
+      setActiveUploadCount(prev => prev - 1);
+    }
   };
 
   const removeMedia = (index: number) => {
@@ -417,8 +455,8 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
                         variant="ghost" 
                         size="sm" 
                         className="text-red-500 hover:text-red-600 hover:bg-red-50"
-                        onClick={() => {
-                          onResetCard(selectedCard.id);
+                        onClick={async () => {
+                          await onResetCard(selectedCard.id);
                           setSelectedCardId(null);
                         }}
                       >
@@ -426,7 +464,14 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
                         Reset Card
                       </Button>
                     )}
-                    <Button variant="ghost" size="sm" onClick={() => setSelectedCardId(null)}>Close</Button>
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      disabled={activeUploadCount > 0}
+                      onClick={() => setSelectedCardId(null)}
+                    >
+                      Close
+                    </Button>
                   </div>
                 </div>
 
@@ -547,6 +592,14 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
                             <span className="text-[8px] font-bold uppercase">Video</span>
                             <input type="file" accept="video/*" className="hidden" onChange={(e) => handleFileUpload(e, "video")} />
                           </label>
+                          {uploadProgress !== null && (
+                            <div className="w-full mt-2">
+                              <div className="w-full bg-zinc-200 rounded-full h-1.5">
+                                <div className="bg-black h-1.5 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }}></div>
+                              </div>
+                              <p className="text-[8px] text-zinc-500 mt-1">Uploading: {Math.round(uploadProgress)}%</p>
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -554,10 +607,10 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
                       <Button 
                         variant="primary" 
                         className="w-full py-4 text-lg rounded-2xl"
-                        disabled={!resultText || (selectedCard.password && !verifyPassword)}
+                        disabled={!resultText || (selectedCard.password && !verifyPassword) || activeUploadCount > 0}
                         onClick={handleSubmit}
                       >
-                        Submit Results
+                        {activeUploadCount > 0 ? "Uploading..." : "Submit Results"}
                       </Button>
                     </div>
                   ) : (

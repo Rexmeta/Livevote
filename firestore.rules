@@ -133,8 +133,9 @@ service cloud.firestore {
       allow read: if true;
       allow create: if isAuthenticated() && isValidPoll(request.resource.data) && request.resource.data.uid == request.auth.uid;
       allow update: if isAdmin() || 
-                      (isAuthenticated() && resource.data.uid == request.auth.uid && isValidPoll(request.resource.data)) ||
-                      (resource.data.status == 'setup' && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['teams']) && isValidPoll(request.resource.data));
+                      (isAuthenticated() && resource.data.uid == request.auth.uid) ||
+                      (request.resource.data.diff(resource.data).affectedKeys().hasAny(['teams', 'status']) && 
+                       !request.resource.data.diff(resource.data).affectedKeys().hasAny(['uid', 'createdAt', 'id']));
       allow delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
       
       match /votes/{voteId} {
