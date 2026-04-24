@@ -15,6 +15,8 @@ async function startServer() {
     cors: { origin: "*" }
   });
   const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
+  console.log(`Cloud Run PORT env: ${process.env.PORT}`);
+  console.log(`Server listening on port ${PORT}`);
 
   app.use(express.json());
 
@@ -97,8 +99,11 @@ async function startServer() {
     });
   }
 
+  httpServer.on('error', (err) => {
+    console.error('Server error:', err);
+  });
   httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://localhost:${PORT} with internal port/env: ${PORT}`);
   });
 }
 
