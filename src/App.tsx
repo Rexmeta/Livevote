@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { cn } from "./lib/utils";
 import { 
   Plus, 
   Vote, 
@@ -36,7 +37,9 @@ import {
   Settings,
   Maximize2,
   LogOut,
-  Home
+  Home,
+  AlertTriangle,
+  RotateCcw
 } from "lucide-react";
 import { 
   BarChart, 
@@ -73,18 +76,24 @@ import {
   createMission,
   getUserProfile,
   createUserProfile,
+  updateUser,
   deletePoll as apiDeletePoll,
   deleteMission as apiDeleteMission,
+  resetPoll as apiResetPoll,
   arrayUnion,
   arrayRemove,
   increment
 } from "./services/firebaseService";
-import { cn } from "./lib/utils";
 import { openMediaInNewTab } from "./lib/mediaUtils";
-import { Poll, VoteResult, AppView, MediaItem, Team, MissionActivity, MissionCard, User } from "./types";
+import { Poll, VoteResult, AppView, MediaItem, Team, MissionActivity, MissionCard, User, QAQuestion, QACard } from "./types";
 import { MISSION_TEMPLATES } from "./constants";
 import { PasswordModal } from "./components/PasswordModal";
 import { CreateMissionForm, MissionBoard } from "./components/Mission";
+import { QA } from "./components/QA";
+import { QADetail } from "./components/QADetail";
+import { AdminQA } from "./components/AdminQA";
+import { Whiteboard } from "./components/Whiteboard";
+import { CreateWhiteboardModal } from "./components/CreateWhiteboardModal";
 import { MediaViewer } from "./components/MediaViewer";
 import { Button } from "./components/Button";
 import { Card } from "./components/Card";
@@ -96,7 +105,21 @@ import { Input } from "./components/Input";
 
 // --- Admin Dashboard ---
 
-function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (view: AppView, id?: string) => void }) {
+function AdminDashboard({ 
+  token, 
+  onNavigate, 
+  setConfirmTitle, 
+  setConfirmMessage, 
+  setConfirmAction, 
+  setShowConfirmModal 
+}: { 
+  token: string; 
+  onNavigate: (view: AppView, id?: string) => void;
+  setConfirmTitle: (title: string) => void;
+  setConfirmMessage: (message: string) => void;
+  setConfirmAction: (action: (() => void) | null) => void;
+  setShowConfirmModal: (show: boolean) => void;
+}) {
   const [polls, setPolls] = useState<any[]>([]);
   const [missions, setMissions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -134,6 +157,11 @@ function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (vie
     await fetchData();
   };
 
+  const resetPoll = async (id: string) => {
+    await apiResetPoll(id);
+    await fetchData();
+  };
+
   const deleteMission = async (id: string) => {
     await apiDeleteMission(id);
     await fetchData();
@@ -159,7 +187,10 @@ function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (vie
           </h3>
           <div className="grid gap-4">
             {polls.map(poll => (
-              <Card key={poll.id} className="p-4 flex items-center justify-between">
+              <Card key={poll.id} className={cn(
+                "p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-l-4",
+                poll.type === "popularity" ? "border-l-purple-500" : "border-l-zinc-300"
+              )}>
                 <div>
                   <div className="font-bold">{poll.title}</div>
                   <div className="text-xs text-zinc-400 flex flex-wrap items-center gap-2">
@@ -170,8 +201,19 @@ function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (vie
                     {poll.registrationCode && <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded font-mono font-bold">REG: {poll.registrationCode}</span>}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                  <Button variant="ghost" size="sm" onClick={() => updatePoll(poll.id, { isVisible: !poll.isVisible }).then(fetchData)}>
+                    {poll.isVisible !== false ? "Visible" : "Hidden"}
+                  </Button>
                   <Button variant="ghost" size="sm" onClick={() => onNavigate("results", poll.id)}>View</Button>
+                  <Button variant="ghost" size="sm" className="text-orange-500 hover:text-orange-600" onClick={() => {
+                    setConfirmTitle("투표 리셋");
+                    setConfirmMessage("정말 이 투표를 리셋하시겠습니까? 모든 투표 데이터가 삭제됩니다.");
+                    setConfirmAction(() => () => resetPoll(poll.id));
+                    setShowConfirmModal(true);
+                  }}>
+                    <RotateCcw size={16} />
+                  </Button>
                   <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-600" onClick={() => {
                     {
                       setConfirmTitle("투표 삭제");
@@ -195,7 +237,7 @@ function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (vie
           </h3>
           <div className="grid gap-4">
             {missions.map(mission => (
-              <Card key={mission.id} className="p-4 flex items-center justify-between">
+              <Card key={mission.id} className="p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
                   <div className="font-bold">{mission.title}</div>
                   <div className="text-xs text-zinc-400 flex flex-wrap items-center gap-2">
@@ -203,7 +245,10 @@ function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (vie
                     {mission.joinCode && <span className="px-1.5 py-0.5 bg-zinc-100 text-zinc-600 rounded font-mono font-bold">JOIN: {mission.joinCode}</span>}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                  <Button variant="ghost" size="sm" onClick={() => updateMission(mission.id, { isVisible: !mission.isVisible }).then(fetchData)}>
+                    {mission.isVisible !== false ? "Visible" : "Hidden"}
+                  </Button>
                   <Button variant="ghost" size="sm" onClick={() => {
                     const url = new URL(window.location.href);
                     url.searchParams.set("mission", mission.id);
@@ -228,6 +273,16 @@ function AdminDashboard({ token, onNavigate }: { token: string; onNavigate: (vie
               </Card>
             ))}
           </div>
+        </section>
+
+        <section>
+          <AdminQA 
+            pollId="global-qa" 
+            setConfirmTitle={setConfirmTitle}
+            setConfirmMessage={setConfirmMessage}
+            setConfirmAction={setConfirmAction}
+            setShowConfirmModal={setShowConfirmModal}
+          />
         </section>
       </div>
     </div>
@@ -375,7 +430,7 @@ function Auth({ onAuthSuccess, onCancel }: { onAuthSuccess: (user: User, token: 
 // --- Main App ---
 
 export default function App() {
-  const [topTab, setTopTab] = useState<"vote" | "mission">("vote");
+  const [topTab, setTopTab] = useState<"vote" | "mission" | "qa">("vote");
   const [view, setView] = useState<AppView>("home");
   const [currentPollId, setCurrentPollId] = useState<string | null>(null);
   const [currentMissionId, setCurrentMissionId] = useState<string | null>(null);
@@ -395,7 +450,28 @@ export default function App() {
   const [passwordInput, setPasswordInput] = useState("");
   const [passwordError, setPasswordError] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [anonymousName, setAnonymousName] = useState<string | null>(null);
+  const [showNameModal, setShowNameModal] = useState(false);
+  const [whiteboards, setWhiteboards] = useState<{id: string, title: string, description: string, password?: string}[]>([{id: 'default', title: 'My Project Board', description: 'Default board'}]);
   const [token, setToken] = useState<string | null>(localStorage.getItem("vote_token"));
+
+  const enterWhiteboard = (id: string) => {
+    if (!anonymousName) {
+      setShowNameModal(true);
+      setPendingMissionId(id);
+    } else {
+      // Proceed to whiteboard
+      setView("whiteboard-detail");
+    }
+  };
+
+  const createWhiteboard = (config: { title: string; description: string; password?: string }) => {
+    const newBoard = {
+      id: Math.random().toString(36).substring(2, 9),
+      ...config
+    };
+    setWhiteboards([...whiteboards, newBoard]);
+  };
   const [userId] = useState(() => {
     const saved = localStorage.getItem("vote_user_id");
     if (saved) return saved;
@@ -404,8 +480,11 @@ export default function App() {
     return id;
   });
   const [viewingMedia, setViewingMedia] = useState<MediaItem | null>(null);
+  const [currentQACard, setCurrentQACard] = useState<QACard | null>(null);
   const [resetCardId, setResetCardId] = useState<string | null>(null);
   const [showJoinCodeModal, setShowJoinCodeModal] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
   const [joinCodeInfo, setJoinCodeInfo] = useState<{ title: string; joinCode?: string; registrationCode?: string } | null>(null);
 
   // Check/Register user and role
@@ -419,6 +498,7 @@ export default function App() {
           // Force admin role if email matches, even if Firestore is out of sync
           if (isAdminEmail && profile.role !== "admin") {
             profile.role = "admin";
+            await updateUser(firebaseUser.uid, { role: "admin" });
           }
           setUser(profile);
         } else {
@@ -671,6 +751,16 @@ export default function App() {
 
     if (currentPollId) {
       unsubscribePoll = subscribeToPoll(currentPollId, (data) => {
+        console.log("Poll data updated:", data);
+        if (data) {
+          const lastReset = localStorage.getItem(`lastReset_${currentPollId}`);
+          console.log("Checking reset:", { lastReset, lastResetAt: data.lastResetAt });
+          if (data.lastResetAt && (!lastReset || parseInt(lastReset) < data.lastResetAt)) {
+            console.log("Resetting voted status");
+            localStorage.removeItem(`voted_${currentPollId}`);
+            localStorage.setItem(`lastReset_${currentPollId}`, data.lastResetAt.toString());
+          }
+        }
         setPollData(data);
       });
       unsubscribeVotes = subscribeToVotes(currentPollId, (updatedResults) => {
@@ -807,15 +897,17 @@ export default function App() {
   };
 
   const handleResetMissionCard = async (missionId: string, cardId: string, password: string) => {
+    console.log("handleResetMissionCard called with:", { missionId, cardId, password });
     if (!missionData) return;
     
     const card = missionData.cards.find(c => c.id === cardId);
     if (!card) return;
 
     if (card.password && password !== card.password) {
-      alert("비밀번호가 일치하지 않습니다.");
+      setPasswordError(true);
       return;
     }
+    setPasswordError(false);
     
     const updatedCards = missionData.cards.map(card => {
       if (card.id === cardId) {
@@ -832,9 +924,15 @@ export default function App() {
     });
 
     const newJoinedCount = Math.max((missionData.joinedCount || 0) - 1, 0);
-    await updateMission(missionId, { cards: updatedCards, joinedCount: newJoinedCount });
-    setResetCardId(null);
-    setShowPasswordModal(false);
+    try {
+      await updateMission(missionId, { cards: updatedCards, joinedCount: newJoinedCount });
+      console.log("Mission updated successfully");
+      setResetCardId(null);
+      setShowPasswordModal(false);
+    } catch (error) {
+      console.error("Error updating mission:", error);
+      // Optionally set an error state here to show in the UI
+    }
   };
 
   const handleVote = async (responses: { questionId: string; teamId?: string; optionIndex: number }[]) => {
@@ -846,15 +944,26 @@ export default function App() {
     }
     const userId = user?.id || `guest_${Math.random().toString(36).substring(2, 10)}`;
     console.log("Casting vote for user:", userId);
-    await castVote(currentPollId, userId, responses);
+
+    // Optimistic update
     localStorage.setItem(`voted_${currentPollId}`, "true");
     navigateTo("results", currentPollId);
+
+    try {
+      await castVote(currentPollId, userId, responses);
+    } catch (error) {
+      console.error("Failed to cast vote:", error);
+      // Rollback
+      localStorage.removeItem(`voted_${currentPollId}`);
+      navigateTo("vote", currentPollId);
+      alert("투표 제출에 실패했습니다. 다시 시도해주세요.");
+    }
   };
 
   return (
     <div className="min-h-screen bg-zinc-50 text-zinc-900 font-sans selection:bg-black selection:text-white">
       {/* Header */}
-      <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-md border-b border-zinc-200">
+      <header className="sticky top-0 z-60 bg-white/80 backdrop-blur-md border-b border-zinc-200">
         <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center">
             <nav className="flex items-center bg-zinc-100 p-1 rounded-xl">
@@ -877,6 +986,26 @@ export default function App() {
               >
                 <Target size={14} />
                 Team Mission
+              </button>
+              <button 
+                onClick={() => { setTopTab("qa"); setView("home"); }}
+                className={cn(
+                  "px-3 sm:px-4 py-1 rounded-lg text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 sm:gap-2",
+                  topTab === "qa" ? "bg-white shadow-sm text-black" : "text-zinc-500 hover:text-zinc-700"
+                )}
+              >
+                <Send size={14} />
+                Real-time Q&A
+              </button>
+              <button 
+                onClick={() => { setTopTab("whiteboard"); setView("whiteboard"); }}
+                className={cn(
+                  "px-3 sm:px-4 py-1 rounded-lg text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 sm:gap-2",
+                  topTab === "whiteboard" ? "bg-white shadow-sm text-black" : "text-zinc-500 hover:text-zinc-700"
+                )}
+              >
+                <Layout size={14} />
+                Whiteboard
               </button>
             </nav>
           </div>
@@ -918,7 +1047,11 @@ export default function App() {
                 if (!user) {
                   setView("auth");
                 } else {
-                  setView("create");
+                  if (topTab === "qa") {
+                    setShowCreateModal(true);
+                  } else {
+                    setView("create");
+                  }
                 }
               }}
             >
@@ -943,6 +1076,62 @@ export default function App() {
             </motion.div>
           )}
 
+          {view === "whiteboard" && (
+            <motion.div
+              key="whiteboard"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="space-y-6"
+            >
+              <div className="flex justify-between items-center">
+                <h2 className="text-3xl font-bold">Whiteboards</h2>
+                <Button onClick={() => setShowCreateModal(true)}>
+                  <Plus size={18} className="mr-2" /> New Whiteboard
+                </Button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {whiteboards.map(board => (
+                  <Card 
+                    key={board.id}
+                    className="group hover:border-black transition-all cursor-pointer p-8 flex flex-col justify-between aspect-video sm:aspect-square"
+                    onClick={() => enterWhiteboard(board.id)}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="px-3 py-1 rounded-full text-[10px] font-bold tracking-widest uppercase bg-blue-100 text-blue-600">
+                        Whiteboard
+                      </div>
+                    </div>
+                    <h3 className="text-2xl font-bold leading-tight group-hover:underline decoration-2 underline-offset-4">
+                      {board.title}
+                    </h3>
+                    <div className="flex items-center justify-between pt-6 border-t border-zinc-100">
+                      <span className="text-xs font-bold uppercase tracking-widest text-zinc-400">Open Board</span>
+                      <div className="w-10 h-10 rounded-full bg-zinc-100 flex items-center justify-center group-hover:bg-black group-hover:text-white transition-all">
+                        <ChevronRight size={20} />
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </motion.div>
+          )}
+
+          {view === "whiteboard-detail" && (
+            <motion.div
+              key="whiteboard-detail"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed top-14 bottom-0 left-0 right-0 z-50"
+            >
+              <Button variant="ghost" onClick={() => setView("whiteboard")} className="absolute top-4 left-4 z-10 bg-white/80 backdrop-blur-sm">
+                <ArrowLeft size={18} className="mr-2" /> Back to Boards
+              </Button>
+              <Whiteboard userName={anonymousName || "Anonymous"} />
+            </motion.div>
+          )}
+
           {view === "admin" && user?.role === "admin" && token && (
             <motion.div
               key="admin"
@@ -950,7 +1139,14 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <AdminDashboard token={token} onNavigate={(v, id) => navigateTo(v, id)} />
+              <AdminDashboard 
+                token={token} 
+                onNavigate={(v, id) => navigateTo(v, id)}
+                setConfirmTitle={setConfirmTitle}
+                setConfirmMessage={setConfirmMessage}
+                setConfirmAction={setConfirmAction}
+                setShowConfirmModal={setShowConfirmModal}
+              />
             </motion.div>
           )}
 
@@ -960,40 +1156,45 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="space-y-12"
+              className="space-y-6"
             >
-              <div className="max-w-2xl">
-                <h2 className="text-5xl sm:text-6xl font-black tracking-tighter leading-[0.9] mb-6">
-                  {topTab === "vote" ? "REAL-TIME VOTING MADE SIMPLE." : "TEAM MISSIONS FOR COLLABORATION."}
-                </h2>
-                <p className="text-xl text-zinc-500 font-medium leading-relaxed">
-                  {topTab === "vote" 
-                    ? "Engage your audience with live polls, popularity contests, and instant results."
-                    : "Assign creative tasks to teams and share results in real-time."}
-                </p>
-                <div className="flex flex-col sm:flex-row items-center gap-4 pt-8">
+              {topTab !== "qa" && (
+                <div className="max-w-2xl">
+                  <h2 className="text-4xl sm:text-5xl font-black tracking-tighter leading-[0.9] mb-4">
+                    {topTab === "vote" ? "REAL-TIME VOTING MADE SIMPLE." : topTab === "mission" ? "TEAM MISSIONS FOR COLLABORATION." : "REAL-TIME Q&A."}
+                  </h2>
+                  <p className="text-lg text-zinc-500 font-medium leading-relaxed">
+                    {topTab === "vote" 
+                      ? "Engage your audience with live polls, popularity contests, and instant results."
+                      : topTab === "mission" 
+                      ? "Assign creative tasks to teams and share results in real-time."
+                      : "Ask questions and vote on the best ones in real-time."}
+                  </p>
+                </div>
+              )}
+                <div className="flex flex-col sm:flex-row items-center gap-4 pt-4">
                   <Button 
-                    className="w-full sm:w-auto px-8 py-4 text-lg rounded-2xl" 
-                    onClick={() => {
-                      if (!user) {
-                        setView("auth");
-                      } else {
-                        setView("create");
-                      }
-                    }}
-                  >
-                    Create a {topTab === "vote" ? "Poll" : "Mission"}
-                  </Button>
+                      className="w-full sm:w-auto px-8 py-4 text-lg rounded-2xl" 
+                      onClick={() => {
+                        if (!user) {
+                          setView("auth");
+                        } else if (topTab === "qa") {
+                          setShowCreateModal(true);
+                        } else {
+                          setView("create");
+                        }
+                      }}
+                    >
+                      Create a {topTab === "vote" ? "Poll" : topTab === "mission" ? "Mission" : "Q&A Card"}
+                    </Button>
                   {topTab === "vote" && <JoinPollBox onJoin={(id) => navigateTo("vote", id)} />}
                 </div>
-              </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {topTab === "vote" ? (
-                  activePolls.map((poll) => (
+                {topTab === "vote" && activePolls.filter(poll => poll.isVisible !== false).map((poll) => (
                     <Card 
                       key={poll.id} 
-                      className="group hover:border-black transition-all cursor-pointer p-8 flex flex-col justify-between aspect-square"
+                      className="group hover:border-black transition-all cursor-pointer p-8 flex flex-col justify-between aspect-video sm:aspect-square"
                       onClick={() => {
                         const isAdmin = user?.role === "admin" || poll.uid === user?.id;
                         if (poll.type === "popularity" && poll.status === "setup") {
@@ -1067,11 +1268,11 @@ export default function App() {
                       </div>
                     </Card>
                   ))
-                ) : (
-                  activeMissions.map((mission) => (
+                }
+                {topTab === "mission" && activeMissions.filter(mission => mission.isVisible !== false).map((mission) => (
                     <Card 
                       key={mission.id} 
-                      className="group hover:border-emerald-500 transition-all cursor-pointer p-8 flex flex-col justify-between aspect-square"
+                      className="group hover:border-emerald-500 transition-all cursor-pointer p-8 flex flex-col justify-between aspect-video sm:aspect-square"
                       onClick={() => navigateToMission(mission.id)}
                     >
                       <div className="space-y-4">
@@ -1132,27 +1333,54 @@ export default function App() {
                       </div>
                     </Card>
                   ))
+                }
+                {topTab === "qa" && (
+                  <div className="col-span-full">
+                    <QA pollId="global-qa" userId={user?.id || "anonymous"} showCreateModal={showCreateModal} setShowCreateModal={setShowCreateModal} onSelectCard={(card) => { setCurrentQACard(card); setView("qa-detail"); }} />
+                  </div>
                 )}
 
-                <Card 
-                  className="border-dashed border-2 border-zinc-200 bg-transparent hover:border-black hover:bg-zinc-50 transition-all cursor-pointer flex flex-col items-center justify-center gap-4 aspect-square"
-                  onClick={() => {
-                    if (!user) {
-                      setView("auth");
-                    } else {
-                      setView("create");
-                    }
-                  }}
-                >
-                  <div className="w-12 h-12 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-400">
-                    <Plus size={24} />
-                  </div>
-                  <div className="text-center">
-                    <div className="font-bold">Create New {topTab === "vote" ? "Poll" : "Mission"}</div>
-                    <div className="text-xs text-zinc-400 font-medium">Start a new activity in seconds</div>
-                  </div>
-                </Card>
+                {topTab !== "qa" && (
+                  <Card 
+                    className="border-dashed border-2 border-zinc-200 bg-transparent hover:border-black hover:bg-zinc-50 transition-all cursor-pointer flex flex-col items-center justify-center gap-4 aspect-square"
+                    onClick={() => {
+                      if (!user) {
+                        setView("auth");
+                      } else {
+                        setView("create");
+                      }
+                    }}
+                  >
+                    <div className="w-12 h-12 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-400">
+                      <Plus size={24} />
+                    </div>
+                    <div className="text-center">
+                      <div className="font-bold">Create New {topTab === "vote" ? "Poll" : "Mission"}</div>
+                      <div className="text-xs text-zinc-400 font-medium">Start a new activity in seconds</div>
+                    </div>
+                  </Card>
+                )}
               </div>
+            </motion.div>
+          )}
+
+          {view === "qa-detail" && currentQACard && (
+            <motion.div
+              key="qa-detail"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+            >
+              <QADetail 
+                pollId="global-qa"
+                userId={user?.id || "anonymous"}
+                card={currentQACard} 
+                onBack={() => {
+                  setCurrentQACard(null);
+                  setView("qa");
+                }}
+                isAdmin={user?.role === "admin" || currentQACard.uid === user?.id}
+              />
             </motion.div>
           )}
 
@@ -1180,7 +1408,7 @@ export default function App() {
 
           {view === "vote" && pollData && (
             <motion.div
-              key="vote"
+              key={`vote-${pollData.lastResetAt || 0}`}
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
@@ -1220,6 +1448,7 @@ export default function App() {
                   user={user}
                   onUpdateStatus={(status) => handleUpdateStatus(missionData.id, status)}
                   onResetCard={(cardId) => {
+                    console.log("Reset card clicked for:", cardId);
                     setResetCardId(cardId);
                     setShowPasswordModal(true);
                   }}
@@ -1260,14 +1489,17 @@ export default function App() {
         onClose={() => {
           setShowPasswordModal(false);
           setResetCardId(null);
+          setPasswordError(false);
         }}
         onConfirm={(password) => {
+          console.log("PasswordModal onConfirm called with:", { resetCardId, missionData });
           if (resetCardId && missionData) {
             handleResetMissionCard(missionData.id, resetCardId, password);
           }
         }}
         title="카드 리셋"
         message="이 작업은 모든 팀 진행 상황을 영구적으로 삭제하며 되돌릴 수 없습니다. 비밀번호를 입력하여 확인해주세요."
+        error={passwordError ? "비밀번호가 일치하지 않습니다." : undefined}
       />
 
       {/* Footer */}
@@ -1284,6 +1516,47 @@ export default function App() {
       </footer>
 
       {/* Password Modal */}
+      <AnimatePresence>
+        {showNameModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl space-y-6"
+            >
+              <h3 className="text-2xl font-black tracking-tighter uppercase">Enter Your Name</h3>
+              <input
+                type="text"
+                placeholder="Your Name"
+                className="w-full p-4 rounded-2xl border border-zinc-200"
+                onChange={(e) => setAnonymousName(e.target.value)}
+              />
+              <Button className="w-full py-4 rounded-2xl" onClick={() => {
+                if (anonymousName) {
+                  setShowNameModal(false);
+                  setView("whiteboard-detail");
+                }
+              }}>
+                Enter
+              </Button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showCreateModal && (
+          <CreateWhiteboardModal 
+            onClose={() => setShowCreateModal(false)} 
+            onCreate={(config) => {
+              createWhiteboard(config);
+              setShowCreateModal(false);
+            }} 
+          />
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {showJoinCodeModal && joinCodeInfo && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -1372,8 +1645,11 @@ export default function App() {
                 <Button variant="ghost" className="flex-1 py-4 rounded-2xl" onClick={() => setShowConfirmModal(false)}>
                   취소
                 </Button>
-                <Button className="flex-1 py-4 rounded-2xl bg-red-600 hover:bg-red-700" onClick={() => {
-                  confirmAction?.();
+                <Button className="flex-1 py-4 rounded-2xl bg-red-600 hover:bg-red-700" onClick={async () => {
+                  console.log("CONFIRM ACTION CALLED from App.tsx");
+                  if (confirmAction) {
+                    await confirmAction();
+                  }
                   setShowConfirmModal(false);
                 }}>
                   삭제
@@ -1383,6 +1659,21 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+      <AnimatePresence>
+        {showPasswordModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl space-y-6"
+            >
+              <Card>
+                <div className="space-y-2 text-center">
+                  <div className="w-16 h-16 bg-zinc-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                    <Lock className="text-black" size={32} />
+                  </div>
+                  <h3 className="text-2xl font-black tracking-tighter uppercase">Password Required</h3>
                   <p className="text-zinc-500 text-sm font-medium">This mission activity is password protected.</p>
                 </div>
 
@@ -2131,9 +2422,19 @@ function JoinCodeGate({ poll, onJoin, mode = "vote" }: { poll: Poll; onJoin: () 
 
 function VoteInterface({ poll, user, onVote, onViewResults, onViewMedia }: { poll: Poll; user: User | null; onVote: (responses: { questionId: string; teamId?: string; optionIndex: number }[]) => void; onViewResults: () => void; onViewMedia: (item: MediaItem) => void }) {
   const [selections, setSelections] = useState<Record<string, number>>({});
-  const [isJoined, setIsJoined] = useState(false);
-  const hasVoted = localStorage.getItem(`voted_${poll.id}`) === "true";
+  const [isJoined, setIsJoined] = useState(localStorage.getItem(`joined_${poll.id}`) === "true");
+  const [hasVoted, setHasVoted] = useState(localStorage.getItem(`voted_${poll.id}`) === "true");
+  
+  useEffect(() => {
+    setHasVoted(localStorage.getItem(`voted_${poll.id}`) === "true");
+  }, [poll.id, poll.lastResetAt]);
+
   console.log("VoteInterface state:", { isJoined, hasVoted, pollStatus: poll.status });
+
+  const handleJoin = () => {
+    setIsJoined(true);
+    localStorage.setItem(`joined_${poll.id}`, "true");
+  };
 
   const handleSelect = (questionId: string, teamId: string | undefined, optionIndex: number) => {
     const key = teamId ? `${questionId}_${teamId}` : questionId;
@@ -2180,9 +2481,7 @@ function VoteInterface({ poll, user, onVote, onViewResults, onViewMedia }: { pol
     onVote(responses);
   };
 
-  if (!isJoined && !hasVoted && poll.joinCode) {
-    return <JoinCodeGate poll={poll} onJoin={() => setIsJoined(true)} />;
-  }
+
 
   if (poll.status === "setup") {
     return (
@@ -2277,7 +2576,10 @@ function VoteInterface({ poll, user, onVote, onViewResults, onViewMedia }: { pol
                       isSelected ? "border-black bg-white shadow-lg" : "border-zinc-100 bg-zinc-50"
                     )}>
                       <div className="flex justify-between items-start">
-                        <h4 className="text-lg font-bold">{team.name}</h4>
+                        <div className="space-y-1">
+                          <h4 className="text-lg font-bold">{team.name}</h4>
+                          {team.description && <p className="text-sm text-zinc-600">{team.description}</p>}
+                        </div>
                         <button
                           onClick={() => handleSelect(poll.questions[0].id, undefined, index)}
                           className={cn(
@@ -2411,7 +2713,11 @@ function ResultsDashboard({ poll, results, user, onVoteAgain, onUpdateStatus, on
   const [copied, setCopied] = useState(false);
   const [copiedTeamId, setCopiedTeamId] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState<string>("");
-  const hasVoted = localStorage.getItem(`voted_${poll.id}`) === "true";
+  const [hasVoted, setHasVoted] = useState(localStorage.getItem(`voted_${poll.id}`) === "true");
+
+  useEffect(() => {
+    setHasVoted(localStorage.getItem(`voted_${poll.id}`) === "true");
+  }, [poll.id, poll.lastResetAt]);
 
   useEffect(() => {
     if (poll.deadline && poll.status === "setup") {
@@ -2443,10 +2749,8 @@ function ResultsDashboard({ poll, results, user, onVoteAgain, onUpdateStatus, on
   };
 
   const totalParticipants = useMemo(() => {
-    if (poll.questions.length === 0) return 0;
-    const firstQResults = results.filter(r => r.questionId === poll.questions[0].id);
-    return firstQResults.reduce((sum, r) => sum + r.count, 0);
-  }, [poll, results]);
+    return results.reduce((sum, r) => sum + r.count, 0);
+  }, [results]);
 
   const copyLink = () => {
     const url = new URL(window.location.href);
@@ -2614,8 +2918,9 @@ function ResultsDashboard({ poll, results, user, onVoteAgain, onUpdateStatus, on
                 <Card className="p-8">
                   <div className="space-y-8">
                     {poll.teams.map((team, index) => {
-                      const teamVotes = results.filter(r => r.teamId === team.id).length;
-                      const percentage = results.length > 0 ? (teamVotes / results.length) * 100 : 0;
+                      const teamVotes = results.find(r => r.teamId === team.id)?.count || 0;
+                      const totalVotes = results.reduce((sum, r) => sum + r.count, 0);
+                      const percentage = totalVotes > 0 ? (teamVotes / totalVotes) * 100 : 0;
                       
                       return (
                         <div key={team.id} className="space-y-3">

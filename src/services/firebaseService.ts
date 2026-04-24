@@ -14,11 +14,12 @@ import {
   increment,
   writeBatch,
   arrayUnion,
-  arrayRemove
+  arrayRemove,
+  addDoc
 } from 'firebase/firestore';
 export { arrayUnion, arrayRemove, increment };
 import { db, auth } from '../firebase';
-import { Poll, MissionActivity, VoteResult, User } from '../types';
+import { Poll, MissionActivity, VoteResult, User, QAQuestion, QACard, QAPage } from '../types';
 
 // --- Error Handling ---
 
@@ -154,6 +155,25 @@ export const deletePoll = async (id: string) => {
   }
 };
 
+export const resetPoll = async (pollId: string) => {
+  const path = `polls/${pollId}/votes`;
+  try {
+    // 1. Reset voteCount to 0 and update lastResetAt in poll document
+    await updateDoc(doc(db, 'polls', pollId), { 
+      voteCount: 0,
+      lastResetAt: Date.now() 
+    });
+    
+    // 2. Delete all documents in votes subcollection
+    const votesSnapshot = await getDocs(collection(db, 'polls', pollId, 'votes'));
+    const batch = writeBatch(db);
+    votesSnapshot.docs.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+};
+
 // --- Votes ---
 
 export const castVote = async (pollId: string, userId: string, responses: any[]) => {
@@ -187,16 +207,17 @@ export const subscribeToVotes = (pollId: string, callback: (results: VoteResult[
     const resultsMap: Record<string, number> = {};
     
     votes.forEach((v: any) => {
-      const key = `${v.questionId}_${v.teamId || ''}_${v.optionIndex}`;
+      // For popularity polls, we want to count votes per teamId.
+      // The key should be based on teamId.
+      const key = v.teamId || 'no-team';
       resultsMap[key] = (resultsMap[key] || 0) + 1;
     });
     
     const results: VoteResult[] = Object.entries(resultsMap).map(([key, count]) => {
-      const [questionId, teamId, optionIndex] = key.split('_');
       return {
-        questionId,
-        teamId: teamId || undefined,
-        optionIndex: parseInt(optionIndex),
+        questionId: 'popularity', // Placeholder
+        teamId: key === 'no-team' ? undefined : key,
+        optionIndex: 0, // Placeholder
         count
       };
     });
@@ -320,5 +341,117 @@ export const createUserProfile = async (user: User) => {
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, path);
+  }
+};
+
+export const updateUser = async (id: string, data: Partial<User>) => {
+  const path = `users/${id}`;
+  try {
+    await updateDoc(doc(db, 'users', id), data);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+};
+
+// --- Q&A ---
+
+export const subscribeToQACards = (pollId: string, callback: (cards: QACard[]) => void) => {
+  const q = query(collection(db, 'polls', pollId, 'qaCards'), orderBy('createdAt', 'desc'));
+  return onSnapshot(q, (snapshot) => {
+    const cards = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as QACard));
+    callback(cards);
+  }, (error) => {
+    handleFirestoreError(error, OperationType.LIST, `polls/${pollId}/qaCards`);
+  });
+};
+
+export const subscribeToPages = (pollId: string, cardId: string, callback: (pages: QAPage[]) => void) => {
+  const q = query(collection(db, 'polls', pollId, 'qaCards', cardId, 'pages'), orderBy('createdAt', 'asc'));
+  return onSnapshot(q, (snapshot) => {
+    const pages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as QAPage));
+    callback(pages);
+  }, (error) => {
+    handleFirestoreError(error, OperationType.LIST, `polls/${pollId}/qaCards/${cardId}/pages`);
+  });
+};
+
+export const addPage = async (pollId: string, cardId: string, title: string) => {
+  const path = `polls/${pollId}/qaCards/${cardId}/pages`;
+  try {
+    await addDoc(collection(db, 'polls', pollId, 'qaCards', cardId, 'pages'), {
+      title,
+      createdAt: Date.now()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+};
+
+export const addQACard = async (pollId: string, userId: string, title: string, description: string, password?: string) => {
+  const path = `polls/${pollId}/qaCards`;
+  try {
+    await addDoc(collection(db, 'polls', pollId, 'qaCards'), {
+      title,
+      description,
+      password: password || null,
+      uid: auth.currentUser?.uid || userId,
+      createdAt: Date.now()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+};
+
+export const subscribeToQuestions = (pollId: string, cardId: string, pageId: string, callback: (questions: QAQuestion[]) => void) => {
+  const q = query(collection(db, 'polls', pollId, 'qaCards', cardId, 'pages', pageId, 'questions'), orderBy('createdAt', 'desc'));
+  return onSnapshot(q, (snapshot) => {
+    const questions = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as QAQuestion));
+    callback(questions);
+  }, (error) => {
+    handleFirestoreError(error, OperationType.LIST, `polls/${pollId}/qaCards/${cardId}/pages/${pageId}/questions`);
+  });
+};
+
+export const addQuestion = async (pollId: string, cardId: string, pageId: string, userId: string, text: string, color: string) => {
+  const path = `polls/${pollId}/qaCards/${cardId}/pages/${pageId}/questions`;
+  try {
+    await addDoc(collection(db, 'polls', pollId, 'qaCards', cardId, 'pages', pageId, 'questions'), {
+      text,
+      votes: 0,
+      uid: userId,
+      createdAt: Date.now(),
+      color
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+};
+
+export const voteQuestion = async (pollId: string, cardId: string, pageId: string, questionId: string) => {
+  const path = `polls/${pollId}/qaCards/${cardId}/pages/${pageId}/questions/${questionId}`;
+  try {
+    await updateDoc(doc(db, 'polls', pollId, 'qaCards', cardId, 'pages', pageId, 'questions', questionId), {
+      votes: increment(1)
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+};
+
+export const deleteQACard = async (pollId: string, cardId: string) => {
+  const path = `polls/${pollId}/qaCards/${cardId}`;
+  try {
+    await deleteDoc(doc(db, 'polls', pollId, 'qaCards', cardId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+};
+
+export const updateQACard = async (pollId: string, cardId: string, data: Partial<QACard>) => {
+  const path = `polls/${pollId}/qaCards/${cardId}`;
+  try {
+    await updateDoc(doc(db, 'polls', pollId, 'qaCards', cardId), data);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 };

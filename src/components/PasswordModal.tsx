@@ -8,6 +8,7 @@ interface PasswordModalProps {
   onConfirm: (password: string) => void;
   title: string;
   message: string;
+  error?: string;
 }
 
 export const PasswordModal: React.FC<PasswordModalProps> = ({
@@ -16,8 +17,10 @@ export const PasswordModal: React.FC<PasswordModalProps> = ({
   onConfirm,
   title,
   message,
+  error,
 }) => {
   const [password, setPassword] = useState("");
+  console.log("PasswordModal rendered, isOpen:", isOpen);
 
   if (!isOpen) return null;
 
@@ -43,12 +46,19 @@ export const PasswordModal: React.FC<PasswordModalProps> = ({
               </button>
             </div>
             <p className="mb-4 text-sm text-gray-600">{message}</p>
+            {error && <p className="mb-4 text-sm text-red-600 font-bold">{error}</p>}
             <div className="relative mb-6">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    onConfirm(password);
+                    setPassword("");
+                  }
+                }}
                 className="w-full rounded-lg border border-gray-300 py-2 pl-10 pr-4 focus:border-indigo-500 focus:outline-none"
                 placeholder="비밀번호 입력"
               />

@@ -16,6 +16,23 @@
 //   - deadline: number (optional)
 //   - createdAt: number (required)
 //
+// Collection: polls/{pollId}/qaCards
+// Document ID: cardId (string)
+// Fields:
+//   - title: string (required, size < 200)
+//   - description: string (required, size < 1000)
+//   - password: string (optional)
+//   - uid: string (required, matches auth.uid)
+//   - createdAt: number (required)
+//
+// Collection: polls/{pollId}/qaCards/{cardId}/questions
+// Document ID: questionId (string)
+// Fields:
+//   - text: string (required, size < 1000)
+//   - votes: number (required, >= 0)
+//   - uid: string (required, matches auth.uid)
+//   - createdAt: number (required)
+//
 // Collection: polls/{pollId}/votes
 // Document ID: voteId (string)
 // Fields:
@@ -67,7 +84,7 @@ service cloud.firestore {
     function isAdmin() {
       return isAuthenticated() &&
         (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-         (request.auth.token.email == "btobkorea@gmail.com" && request.auth.token.email_verified == true));
+         (request.auth.token.email == "btobkorea@gmail.com"));
     }
     
     function isValidEmail(email) {
@@ -103,8 +120,30 @@ service cloud.firestore {
       return data.pollId is string &&
              data.questionId is string &&
              data.optionIndex is number &&
-             data.userId is string &&
-             (request.auth == null || data.userId == request.auth.uid) &&
+             data.userId is string;
+    }
+
+    function isValidPage(data) {
+      return data.keys().hasOnly(['title', 'createdAt']) &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.createdAt is number;
+    }
+
+    function isValidQuestion(data) {
+      return data.keys().hasOnly(['text', 'votes', 'uid', 'createdAt', 'color']) &&
+             data.text is string && data.text.size() > 0 && data.text.size() < 1000 &&
+             data.votes is number && data.votes >= 0 &&
+             data.uid is string &&
+             data.createdAt is number &&
+             data.color is string && data.color.size() > 0 && data.color.size() < 10;
+    }
+
+    function isValidQACard(data) {
+      return data.keys().hasOnly(['title', 'description', 'password', 'uid', 'createdAt']) &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.description is string && data.description.size() < 1000 &&
+             (!('password' in data) || data.password is string || data.password == null) &&
+             data.uid is string &&
              data.createdAt is number;
     }
 
@@ -134,6 +173,7 @@ service cloud.firestore {
       allow create: if isAuthenticated() && isValidPoll(request.resource.data) && request.resource.data.uid == request.auth.uid;
       allow update: if isAdmin() || 
                       (isAuthenticated() && resource.data.uid == request.auth.uid) ||
+                      (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voteCount'])) ||
                       (request.resource.data.diff(resource.data).affectedKeys().hasAny(['teams', 'status']) && 
                        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['uid', 'createdAt', 'id']));
       allow delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
@@ -141,7 +181,27 @@ service cloud.firestore {
       match /votes/{voteId} {
         allow read: if true;
         allow create: if isValidVote(request.resource.data);
-        allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidVote(request.resource.data);
+        allow update: if false;
+        allow delete: if isAdmin();
+      }
+      
+      match /qaCards/{cardId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated() && isValidQACard(request.resource.data);
+        allow delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+        
+        match /pages/{pageId} {
+          allow read: if isAuthenticated();
+          allow create: if isAuthenticated() && isValidPage(request.resource.data);
+          allow delete: if isAdmin();
+
+          match /questions/{questionId} {
+            allow read: if isAuthenticated();
+            allow create: if isAuthenticated() && isValidQuestion(request.resource.data) && request.resource.data.uid == request.auth.uid;
+            allow update: if isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['votes']) && math.abs(request.resource.data.votes - resource.data.votes) == 1;
+            allow delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+          }
+        }
       }
     }
 
@@ -151,7 +211,7 @@ service cloud.firestore {
       allow delete: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
       allow update: if isValidMission(request.resource.data) && 
                       (isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid) || 
-                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cards']));
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cards', 'joinedCount']));
     }
   }
 }

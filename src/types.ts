@@ -17,6 +17,30 @@ export interface Question {
   options: string[];
 }
 
+export interface QAQuestion {
+  id: string;
+  text: string;
+  votes: number;
+  uid: string;
+  createdAt: number;
+  color?: string;
+}
+
+export interface QAPage {
+  id: string;
+  title: string;
+  createdAt: number;
+}
+
+export interface QACard {
+  id: string;
+  title: string;
+  description: string;
+  password?: string;
+  uid: string;
+  createdAt: number;
+}
+
 export interface MissionTemplate {
   id: string;
   cardTitle: string;
@@ -45,6 +69,7 @@ export interface MissionActivity {
   joinCode?: string;
   uid: string;
   createdAt: number;
+  isVisible?: boolean;
 }
 
 export interface Poll {
@@ -62,6 +87,8 @@ export interface Poll {
   createdAt: number;
   teamCount?: number;
   voteCount?: number;
+  lastResetAt?: number;
+  isVisible?: boolean;
 }
 
 export interface VoteResult {
@@ -77,4 +104,4 @@ export interface User {
   role: "user" | "admin";
 }
 
-export type AppView = "home" | "create" | "vote" | "results" | "team-upload" | "admin" | "auth";
+export type AppView = "home" | "create" | "vote" | "results" | "team-upload" | "admin" | "auth" | "qa" | "qa-detail" | "whiteboard";

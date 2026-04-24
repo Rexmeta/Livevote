@@ -435,12 +435,13 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
 
       {/* Modal for Card Interaction */}
       {selectedCard && selectedTemplate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="bg-white rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl"
-          >
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-sm p-4">
+          <div className="flex min-h-full items-center justify-center">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl"
+            >
             <div className="p-8 space-y-8">
                 <div className="flex justify-between items-start">
                   <div className="space-y-1">
@@ -457,7 +458,6 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
                         className="text-red-500 hover:text-red-600 hover:bg-red-50"
                         onClick={async () => {
                           await onResetCard(selectedCard.id);
-                          setSelectedCardId(null);
                         }}
                       >
                         <Trash2 size={16} className="mr-2" />
@@ -678,6 +678,7 @@ export const MissionBoard: React.FC<MissionBoardProps> = ({
             </div>
           </motion.div>
         </div>
+      </div>
       )}
     </div>
   );
